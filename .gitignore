@@ -1,43 +1,32 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
 *.so
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-*.manifest
-*.spec
+.Python
 
-# Virtual environments
+# 虚拟环境
 venv/
-.venv/
 env/
+.venv/
+
+# 数据文件（不要 commit 大的 PDF）
+data/raw/
+data/chroma_db/
+data/processed/
+*.pdf
+
+# 环境变量
 .env
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
-# Environment & secrets
-.env
-.env.local
-.env.*.local
-
-# Data (large/binary)
-data/raw/
-data/processed/
-data/chroma_db/
-
-# Logs
+# 日志
 logs/
 *.log
 
-# OS
+# 系统
 .DS_Store
 Thumbs.db
