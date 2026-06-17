@@ -27,25 +27,60 @@ def merge_spans_by_line(blocks: Dict) -> List[Dict]:
     return lines
 
 
-def is_special_section(text: str, threshold: float) -> bool:
-    SPECIAL_SECTIONS = {
-        'references', 'abstract', 'acknowledgements', 'conclusion',
-        'supplementary material', 'contents', 'introduction'
-    }
-    return threshold >= 12.5 and text.strip().lower() in SPECIAL_SECTIONS
+SPECIAL_SECTIONS = {
+    'references', 'abstract', 'acknowledgements', 'acknowledgments',
+    'conclusion', 'conclusions', 'supplementary material',
+    'contents', 'introduction', 'related work', 'related works',
+    'background', 'method', 'methods', 'methodology',
+    'experiments', 'experiment', 'results', 'discussion',
+    'limitations', 'appendix', 'appendices',
+}
+
+_PURE_NUM_RE = re.compile(r'^\d+(\.\d+)?\.?\s*$')
+_YEAR_RE = re.compile(r'^(19|20)\d{2}[a-z]?\.?$')
+_CITATION_PAGE_RE = re.compile(r'\.{3,}|\bpp?\.\s*\d|\bvol\.?\s*\d|^\s*\d+\s*$')
+
+MAX_TITLE_LEN = 120
+
+
+def _looks_like_title(text: str) -> bool:
+    t = text.strip()
+    if not t or len(t) > MAX_TITLE_LEN:
+        return False
+    if _PURE_NUM_RE.match(t):
+        return False
+    # 拒绝以"年份."或"年份"开头的条目（参考文献常见）
+    first_token = t.split()[0] if t.split() else ''
+    if _YEAR_RE.match(first_token.rstrip('.')):
+        return False
+    # 目录条目（含...点引导符 + 页码）通常很长
+    if _CITATION_PAGE_RE.search(t) and len(t) > 50:
+        return False
+    return True
+
+
+def is_special_section(text: str) -> bool:
+    return text.strip().lower() in SPECIAL_SECTIONS
 
 
 def is_section_title(text: str, size: float) -> bool:
-    section_pattern = re.compile(r'^(\d+\.|[A-Z]\.)\s*')
-    return size >= 12.5 and (section_pattern.match(text) or is_special_section(text, size))
+    t = text.strip()
+    if not _looks_like_title(t):
+        return False
+    section_pattern = re.compile(r'^(\d+\.|[A-Z]\.)\s*\S')
+    is_special = is_special_section(t) and size >= 10.0
+    return bool(section_pattern.match(t)) or is_special
 
 
 def is_subsection_title(text: str, size: float) -> bool:
-    subsection_pattern = re.compile(r'^(\d+\.\d+\.|[A-Z]\.\d+\.)\s*')
-    return size >= 11.5 and subsection_pattern.match(text)
+    t = text.strip()
+    if not _looks_like_title(t):
+        return False
+    subsection_pattern = re.compile(r'^(\d+\.\d+\.|[A-Z]\.\d+\.)\s*\S')
+    return bool(subsection_pattern.match(t))
 
 
-def parse_pdf_structure(pdf_path: str, min_body_size: float = 8.0) -> Dict[str, Any]:
+def parse_pdf_structure(pdf_path: str, min_body_size: float = 6.5) -> Dict[str, Any]:
     
     doc = pymupdf.open(pdf_path)
     metadata = doc.metadata
@@ -61,6 +96,8 @@ def parse_pdf_structure(pdf_path: str, min_body_size: float = 8.0) -> Dict[str, 
     
     current_section: Optional[Dict] = None
     current_subsection: Optional[Dict] = None
+    pre_section_buffer: List[str] = []
+    pre_section_page: Optional[int] = None
     
     def save_current_subsection():
         nonlocal current_section, current_subsection
@@ -105,6 +142,10 @@ def parse_pdf_structure(pdf_path: str, min_body_size: float = 8.0) -> Dict[str, 
             elif is_subsection_title(text, size):
                 if current_section:
                     save_current_subsection()
+                else:
+                    pre_section_buffer.append(text)
+                    pre_section_page = page_num + 1
+                    continue
                 
                 current_subsection = {
                     "title": text,
@@ -116,11 +157,23 @@ def parse_pdf_structure(pdf_path: str, min_body_size: float = 8.0) -> Dict[str, 
             else:
                 if size < min_body_size:
                     continue
-                    
+                
                 if current_subsection:
                     current_subsection["content"] += " " + text
                 elif current_section:
                     current_section["content"] += " " + text
+                else:
+                    pre_section_buffer.append(text)
+                    pre_section_page = pre_section_page or (page_num + 1)
+
+    if pre_section_buffer:
+        first_section = {
+            "title": "Abstract" if result["metadata"].get("title") else "Preamble",
+            "page": pre_section_page or 1,
+            "size": 0.0,
+            "content": " ".join(pre_section_buffer)
+        }
+        result["sections"].insert(0, first_section)
 
     if current_section:
         save_current_subsection()
@@ -142,7 +195,7 @@ def print_structure(result: Dict[str, Any], filename: str):
     print()
 
 
-def batch_process(input_dir: str, output_dir: str, min_body_size: float = 8.0):
+def batch_process(input_dir: str, output_dir: str, min_body_size: float = 6.5):
     """
     批量处理目录下的所有 PDF 文件
     
@@ -203,8 +256,8 @@ def main():
     # 配置输入输出目录
     INPUT_DIR = "../fetch/data/raw"      # 存放 PDF 的目录
     OUTPUT_DIR = "../data/parsed"     # 保存 JSON 的目录
-    
-    batch_process(INPUT_DIR, OUTPUT_DIR, min_body_size=8.0)
+
+    batch_process(INPUT_DIR, OUTPUT_DIR, min_body_size=6.5)
 
 
 if __name__ == "__main__":
