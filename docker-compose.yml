@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  paper-assistant:
+    build: .
+    container_name: paper-assistant
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - paper_data:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  paper_data:
+    driver: local

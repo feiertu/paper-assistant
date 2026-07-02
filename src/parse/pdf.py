@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import config
+
 def merge_spans_by_line(blocks: Dict) -> List[Dict]:
     lines = []
     
@@ -195,17 +197,17 @@ def print_structure(result: Dict[str, Any], filename: str):
     print()
 
 
-def batch_process(input_dir: str, output_dir: str, min_body_size: float = 6.5):
+def batch_process(input_dir: Optional[str] = None, output_dir: Optional[str] = None, min_body_size: float = 6.5):
     """
     批量处理目录下的所有 PDF 文件
-    
+
     Args:
-        input_dir: 输入目录（包含 PDF 文件）
-        output_dir: 输出目录（保存 JSON 结果）
+        input_dir: 输入目录（包含 PDF 文件）。None 则用 config.RAW_PDF_DIR。
+        output_dir: 输出目录（保存 JSON 结果）。None 则用 config.PARSED_DIR。
         min_body_size: 正文最小字号阈值
     """
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
+    input_path = Path(input_dir) if input_dir else config.RAW_PDF_DIR
+    output_path = Path(output_dir) if output_dir else config.PARSED_DIR
     
     if not input_path.exists():
         print(f"❌ 输入目录不存在: {input_dir}")
@@ -253,11 +255,13 @@ def batch_process(input_dir: str, output_dir: str, min_body_size: float = 6.5):
 
 
 def main():
-    # 配置输入输出目录
-    INPUT_DIR = "../fetch/data/raw"      # 存放 PDF 的目录
-    OUTPUT_DIR = "../data/parsed"     # 保存 JSON 的目录
+    # 配置输入输出目录：走 config.py，避免历史版本里"../data/parsed"导致输出落到 src/data/parsed 的 bug
+    INPUT_DIR = str(config.RAW_PDF_DIR)
+    OUTPUT_DIR = str(config.PARSED_DIR)
 
-    batch_process(INPUT_DIR, OUTPUT_DIR, min_body_size=6.5)
+    print(f"📂 INPUT  = {INPUT_DIR}")
+    print(f"📂 OUTPUT = {OUTPUT_DIR}")
+    batch_process(INPUT_DIR, OUTPUT_DIR, min_body_size=config.PDF_MIN_BODY_SIZE)
 
 
 if __name__ == "__main__":

@@ -1,23 +1,28 @@
-import requests 
+import requests
 import xml.etree.ElementTree as ET
- 
-def fetch_arxiv_metadata(query,max_results=5):
-    base_url= "http://export.arxiv.org/api/query"
-    params={
-        "search_query":query,
-        "start":0,
-        "max_results":max_results,
-        "sortBy":"submittedDate",
-        "sortOrder":"descending"
-        
+from typing import List, Dict, Optional
+
+import config
+
+
+def fetch_arxiv_metadata(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
+    q = query or config.ARXIV_QUERY
+    n = max_results if max_results is not None else config.ARXIV_MAX_RESULTS
+    base_url = "http://export.arxiv.org/api/query"
+    params = {
+        "search_query": q,
+        "start": 0,
+        "max_results": n,
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
     }
 
-    response=requests.get(base_url,params=params,timeout=20)
-    
-    if response.status_code !=200:
+    response = requests.get(base_url, params=params, timeout=config.ARXIV_REQUEST_TIMEOUT)
+
+    if response.status_code != 200:
         print(f"API ERROr:{response.status_code}")
         return []
-    
+
     return parse_xml(response.content)
 
 def parse_xml(xml_content):
@@ -54,7 +59,7 @@ def parse_xml(xml_content):
     
     return papers
     
-papers = fetch_arxiv_metadata("cat:cs.AI AND ti:learning", max_results=3)
+papers = fetch_arxiv_metadata()
 for p in papers:
     print(f"标题: {p['title']}")
     print(f"作者: {p['authors']}")
