@@ -104,22 +104,47 @@ def ingest_parsed_dir(
         for fp, doc in docs:
             arxiv_id = fp.stem
             meta = doc.get("metadata") or {}
+
+            # ── 提取摘要：优先从 metadata.abstract（GROBID），否则从 sections 中找 Abstract ──
+            abstract = meta.get("abstract") or ""
+            if not abstract:
+                for sec in doc.get("sections", []) or []:
+                    if sec.get("title", "").strip().lower() == "abstract":
+                        abstract = sec.get("content", "").strip()
+                        break
+            # 截断过长摘要
+            if len(abstract) > 3000:
+                abstract = abstract[:3000] + "…"
+
             paper_dao.insert(
                 Paper(
                     arxiv_id=arxiv_id,
                     title=meta.get("title") or "",
                     authors=meta.get("author") or "",
-                    abstract="",
+                    abstract=abstract,
+                    published=meta.get("creationDate") or "",
+                    pdf_url=meta.get("pdf_url") or "",
                     source=meta.get("source") or "pymupdf",
                     ingest_status="ingested",
                     chunk_count=chunk_counts.get(arxiv_id, 0),
                 )
             )
 
+        # ── 自动提取引用关系 ──
+        citation_count = 0
+        try:
+            from src.parse.citations import batch_extract_citations
+            arxiv_ids = [fp.stem for fp, _ in docs]
+            cite_result = batch_extract_citations(arxiv_ids)
+            citation_count = cite_result.get("citations", 0)
+        except Exception:
+            pass  # 引用提取失败不影响主流程
+
         return {
             "status": "ok",
             "papers": paper_count,
             "chunks": total_chunks,
+            "citations": citation_count,
         }
 
     except Exception as e:
@@ -422,3 +447,88 @@ def reset_store() -> Dict[str, Any]:
         return {"status": "ok", "count": 0}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ──────────────────────────────────────────────
+#  论文推荐（§ 基于向量相似度）
+# ──────────────────────────────────────────────
+
+def recommend_similar(
+    arxiv_id: str,
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """推荐与指定论文相似的论文。
+
+    策略：
+      1. 从向量库中找到目标论文的所有 chunks
+      2. 取前 3 个 chunk 作为查询向量
+      3. 对每个 chunk 检索，排除自身论文
+      4. 聚合命中分数，返回 top-k 不同论文
+
+    Args:
+        arxiv_id: arXiv ID
+        top_k: 返回数量
+
+    Returns:
+        [{"arxiv_id": ..., "title": ..., "score": ..., "shared_chunks": ...}]
+    """
+    store = _get_store()
+    embedder = _get_embedder()
+
+    if store.count() == 0:
+        return []
+
+    # 1) 找到目标论文的 chunk（通过 metadata 过滤）
+    try:
+        # peek 所有 chunks 并筛选出目标论文的
+        all_items = store.peek(limit=min(store.count(), 500))
+        target_chunks = [
+            item for item in all_items
+            if (item.get("metadata") or {}).get("arxiv_id") == arxiv_id
+        ]
+    except Exception:
+        return []
+
+    if not target_chunks:
+        return []
+
+    # 2) 取前 3 个 chunk 文本作为查询
+    query_texts = [c["document"] for c in target_chunks[:3] if c.get("document")]
+    if not query_texts:
+        return []
+
+    # 3) 对每个 query chunk 检索相似
+    paper_scores: Dict[str, float] = {}
+    paper_titles: Dict[str, str] = {}
+    paper_hit_counts: Dict[str, int] = {}
+
+    for q_text in query_texts:
+        q_emb = embedder.embed_query(q_text)
+        hits = store.query(q_emb, top_k=top_k * 3)["hits"]
+        for hit in hits:
+            meta = hit.get("metadata") or {}
+            aid = meta.get("arxiv_id") or ""
+            if not aid or aid == arxiv_id:
+                continue
+            dist = hit.get("distance", 0)
+            score = 1.0 / (1.0 + float(dist)) if dist else 1.0
+            paper_scores[aid] = paper_scores.get(aid, 0.0) + score
+            paper_hit_counts[aid] = paper_hit_counts.get(aid, 0) + 1
+            if aid not in paper_titles:
+                paper_titles[aid] = meta.get("title") or aid
+
+    if not paper_scores:
+        return []
+
+    # 4) 排序取 top-k
+    sorted_papers = sorted(paper_scores, key=lambda x: paper_scores[x], reverse=True)[:top_k]
+
+    return [
+        {
+            "arxiv_id": aid,
+            "title": paper_titles.get(aid, aid),
+            "score": round(paper_scores[aid], 4),
+            "shared_chunks": paper_hit_counts.get(aid, 0),
+        }
+        for aid in sorted_papers
+    ]

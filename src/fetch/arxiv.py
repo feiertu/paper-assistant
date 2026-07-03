@@ -59,8 +59,54 @@ def parse_xml(xml_content):
     
     return papers
     
-papers = fetch_arxiv_metadata()
-for p in papers:
-    print(f"标题: {p['title']}")
-    print(f"作者: {p['authors']}")
-    print(f"摘要: {p['summary'][:200]}...\n")
+def save_metadata_to_db(papers: List[Dict]) -> int:
+    """将 arXiv 元数据保存到 SQLite 数据库。
+
+    Args:
+        papers: fetch_arxiv_metadata() 返回的论文列表
+
+    Returns:
+        成功保存的数量
+    """
+    from src.db import Paper, get_dao
+
+    paper_dao = get_dao("paper")
+    saved = 0
+    for p in papers:
+        try:
+            paper_dao.insert(Paper(
+                arxiv_id=p["id"],
+                title=p.get("title") or "",
+                authors=p.get("authors") or "",
+                abstract=p.get("summary") or "",
+                published=p.get("published") or "",
+                pdf_url=p.get("pdf_url") or "",
+                source="arxiv",
+                ingest_status="pending",
+                chunk_count=0,
+            ))
+            saved += 1
+        except Exception as e:
+            print(f"[WARN] 保存元数据失败 {p.get('id')}: {e}")
+    return saved
+
+
+def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
+    """抓取 arXiv 元数据并保存到数据库。
+
+    Returns:
+        抓取到的论文列表
+    """
+    papers = fetch_arxiv_metadata(query=query, max_results=max_results)
+    if papers:
+        saved = save_metadata_to_db(papers)
+        print(f"已保存 {saved}/{len(papers)} 条元数据到数据库")
+    return papers
+
+
+if __name__ == "__main__":
+    papers = fetch_and_persist()
+    for p in papers:
+        print(f"标题: {p['title']}")
+        print(f"作者: {p['authors']}")
+        print(f"摘要: {p['summary'][:200]}...\n")

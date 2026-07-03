@@ -175,6 +175,43 @@ CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at);
 CREATE INDEX IF NOT EXISTS idx_query_papers_query ON query_papers(query_id);
 CREATE INDEX IF NOT EXISTS idx_collection_papers_col ON collection_papers(collection_id);
+
+-- 引用关系（§15：论文 ↔ 论文）
+CREATE TABLE IF NOT EXISTS citations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    citing_arxiv_id TEXT    NOT NULL,
+    cited_arxiv_id  TEXT    NOT NULL,
+    cited_title     TEXT    DEFAULT '',
+    context         TEXT    DEFAULT '',   -- 引用处的上下文
+    created_at      TEXT    DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(citing_arxiv_id, cited_arxiv_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_citations_citing ON citations(citing_arxiv_id);
+CREATE INDEX IF NOT EXISTS idx_citations_cited ON citations(cited_arxiv_id);
+
+-- 全文搜索虚拟表（论文标题 + 摘要 + 作者）
+CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+    title, authors, abstract, content='papers', content_rowid='id'
+);
+
+-- FTS 同步触发器
+CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
+    INSERT INTO papers_fts(rowid, title, authors, abstract)
+    VALUES (new.id, new.title, new.authors, new.abstract);
+END;
+
+CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
+    INSERT INTO papers_fts(papers_fts, rowid, title, authors, abstract)
+    VALUES ('delete', old.id, old.title, old.authors, old.abstract);
+END;
+
+CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
+    INSERT INTO papers_fts(papers_fts, rowid, title, authors, abstract)
+    VALUES ('delete', old.id, old.title, old.authors, old.abstract);
+    INSERT INTO papers_fts(rowid, title, authors, abstract)
+    VALUES (new.id, new.title, new.authors, new.abstract);
+END;
 """
 
 

@@ -248,8 +248,176 @@ def get_dao(name: str):
             "paper": PaperDAO(),
             "query": QueryDAO(),
             "collection": CollectionDAO(),
+            "citation": CitationDAO(),
         }
     dao = _daos.get(name)
     if dao is None:
-        raise ValueError(f"未知 DAO: {name!r}，可选: paper / query / collection")
+        raise ValueError(f"未知 DAO: {name!r}，可选: paper / query / collection / citation")
     return dao
+
+
+# ══════════════════════════════════════════════
+#  CitationDAO — 引用关系访问
+# ══════════════════════════════════════════════
+
+class CitationDAO:
+    """引用关系 DAO。"""
+
+    def insert(self, citing_arxiv_id: str, cited_arxiv_id: str,
+               cited_title: str = "", context: str = "") -> bool:
+        """添加引用关系（幂等：已存在则忽略）。"""
+        with get_connection() as conn:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO citations
+                       (citing_arxiv_id, cited_arxiv_id, cited_title, context)
+                       VALUES (?, ?, ?, ?)""",
+                    (citing_arxiv_id, cited_arxiv_id, cited_title, context),
+                )
+                conn.commit()
+                return True
+            except Exception:
+                return False
+
+    def batch_insert(self, rows: list) -> int:
+        """批量插入引用关系 [(citing_id, cited_id, title, context), ...]"""
+        with get_connection() as conn:
+            count = 0
+            for citing_arxiv_id, cited_arxiv_id, cited_title, context in rows:
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO citations
+                           (citing_arxiv_id, cited_arxiv_id, cited_title, context)
+                           VALUES (?, ?, ?, ?)""",
+                        (citing_arxiv_id, cited_arxiv_id, cited_title, context),
+                    )
+                    count += 1
+                except Exception:
+                    pass
+            conn.commit()
+            return count
+
+    def find_citations_from(self, arxiv_id: str) -> List[Dict]:
+        """查找某论文引用了哪些论文（outgoing）。"""
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT c.*, p.title as paper_title
+                   FROM citations c
+                   LEFT JOIN papers p ON c.cited_arxiv_id = p.arxiv_id
+                   WHERE c.citing_arxiv_id = ?
+                   ORDER BY c.id""",
+                (arxiv_id,),
+            ).fetchall()
+            return [{
+                "cited_arxiv_id": r["cited_arxiv_id"],
+                "cited_title": r["cited_title"] or r["paper_title"] or "",
+                "context": r["context"] or "",
+                "in_db": bool(r["paper_title"]),
+            } for r in rows]
+
+    def find_citations_to(self, arxiv_id: str) -> List[Dict]:
+        """查找哪些论文引用了这篇（incoming）。"""
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT c.*, p.title as paper_title
+                   FROM citations c
+                   LEFT JOIN papers p ON c.citing_arxiv_id = p.arxiv_id
+                   WHERE c.cited_arxiv_id = ?
+                   ORDER BY c.id""",
+                (arxiv_id,),
+            ).fetchall()
+            return [{
+                "citing_arxiv_id": r["citing_arxiv_id"],
+                "citing_title": r["paper_title"] or r["citing_arxiv_id"],
+                "context": r["context"] or "",
+                "in_db": bool(r["paper_title"]),
+            } for r in rows]
+
+    def get_graph(self, arxiv_id: str) -> Dict:
+        """获取完整引用图（citing + cited）。"""
+        return {
+            "arxiv_id": arxiv_id,
+            "cites": self.find_citations_from(arxiv_id),
+            "cited_by": self.find_citations_to(arxiv_id),
+        }
+
+    def count(self) -> int:
+        with get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
+
+    def clear(self) -> None:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM citations")
+            conn.commit()
+
+
+# ══════════════════════════════════════════════
+#  PaperDAO 扩展：全文搜索
+# ══════════════════════════════════════════════
+
+def _extend_paper_dao():
+    """给 PaperDAO 动态添加 FTS 搜索方法（不改原类避免冲突）。"""
+    def search(self, keyword: str, limit: int = 50,
+               arxiv_id: str = "", author: str = "",
+               year_from: str = "", year_to: str = "",
+               source: str = "", status: str = "",
+               sort_by: str = "created_at") -> List:
+        """全文搜索 + 多条件过滤。
+
+        Args:
+            keyword: FTS5 搜索关键词
+            limit: 最大返回数
+            arxiv_id: arXiv ID 模糊匹配
+            author: 作者名模糊匹配
+            year_from / year_to: 年份范围
+            source: 来源过滤 (arxiv / grobid / pymupdf / manual)
+            status: 状态过滤 (pending / ingested / failed)
+            sort_by: 排序字段 (created_at / title / published)
+        """
+        conditions = []
+        params: list = []
+
+        if keyword and keyword.strip():
+            conditions.append("p.id IN (SELECT rowid FROM papers_fts WHERE papers_fts MATCH ?)")
+            params.append(keyword.strip())
+
+        if arxiv_id:
+            conditions.append("p.arxiv_id LIKE ?")
+            params.append(f"%{arxiv_id}%")
+
+        if author:
+            conditions.append("p.authors LIKE ?")
+            params.append(f"%{author}%")
+
+        if year_from:
+            conditions.append("p.published >= ?")
+            params.append(year_from)
+
+        if year_to:
+            conditions.append("p.published <= ?")
+            params.append(year_to + "-12-31")
+
+        if source:
+            conditions.append("p.source = ?")
+            params.append(source)
+
+        if status:
+            conditions.append("p.ingest_status = ?")
+            params.append(status)
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        allowed_sort = {"created_at": "p.created_at DESC", "title": "p.title ASC",
+                        "published": "p.published DESC"}
+        order = allowed_sort.get(sort_by, "p.created_at DESC")
+
+        with get_connection() as conn:
+            sql = f"SELECT p.* FROM papers p {where} ORDER BY {order} LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(sql, params).fetchall()
+            return [Paper.from_row(r) for r in rows]
+
+    PaperDAO.search = search
+
+
+_extend_paper_dao()

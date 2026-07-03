@@ -88,6 +88,25 @@ LLM_MODEL: str = _env("LLM_MODEL", "qwen-2.5-72b-instruct") or "qwen-2.5-72b-ins
 LLM_TEMPERATURE: float = _env_float("LLM_TEMPERATURE", 0.2)
 LLM_MAX_TOKENS: int = _env_int("LLM_MAX_TOKENS", 1024)
 
+# 任务级模型分离（不设置则回退到 LLM_MODEL）
+LLM_QA_MODEL: str = _env("LLM_QA_MODEL", "") or LLM_MODEL          # RAG 问答
+LLM_SUMMARY_MODEL: str = _env("LLM_SUMMARY_MODEL", "") or LLM_MODEL  # 单文档摘要
+LLM_SURVEY_MODEL: str = _env("LLM_SURVEY_MODEL", "") or LLM_MODEL    # 综述生成
+
+# ---------- 缓存 ----------
+
+CACHE_ENABLED: bool = _env_bool("CACHE_ENABLED", True)
+CACHE_LLM_MAXSIZE: int = _env_int("CACHE_LLM_MAXSIZE", 200)
+CACHE_LLM_TTL: int = _env_int("CACHE_LLM_TTL", 1800)        # LLM 缓存 30 分钟
+CACHE_EMBED_MAXSIZE: int = _env_int("CACHE_EMBED_MAXSIZE", 2000)
+CACHE_EMBED_TTL: int = _env_int("CACHE_EMBED_TTL", 86400)   # Embedding 缓存 24 小时
+
+# ---------- API 鉴权 ----------
+
+API_AUTH_ENABLED: bool = _env_bool("API_AUTH_ENABLED", False)
+API_AUTH_KEY: Optional[str] = _env("API_AUTH_KEY", "") or None  # 简单的 API Key 鉴权
+API_RATE_LIMIT: str = _env("API_RATE_LIMIT", "30/minute") or "30/minute"  # 全局限速
+
 # ---------- Voyage AI ----------
 
 VOYAGE_API_KEY: Optional[str] = _env("VOYAGE_API_KEY")
@@ -133,6 +152,9 @@ def summary() -> dict:
         "EMBEDDING_DIM": EMBEDDING_DIM,
         "RRF_TOP_N": RRF_TOP_N,
         "LLM_MODEL": LLM_MODEL,
+        "LLM_QA_MODEL": LLM_QA_MODEL,
+        "LLM_SUMMARY_MODEL": LLM_SUMMARY_MODEL,
+        "LLM_SURVEY_MODEL": LLM_SURVEY_MODEL,
         "OPENAI_API_KEY_SET": bool(OPENAI_API_KEY),
         "OPENAI_BASE_URL": OPENAI_BASE_URL,
         "VOYAGE_API_KEY_SET": bool(VOYAGE_API_KEY),
@@ -140,6 +162,9 @@ def summary() -> dict:
         "RAG_COLLECTION_NAME": RAG_COLLECTION_NAME,
         "API_HOST": API_HOST,
         "API_PORT": API_PORT,
+        "API_AUTH_ENABLED": API_AUTH_ENABLED,
+        "API_RATE_LIMIT": API_RATE_LIMIT,
+        "CACHE_ENABLED": CACHE_ENABLED,
     }
 
 

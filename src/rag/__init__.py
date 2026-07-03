@@ -14,6 +14,7 @@ from .orchestrator import (
     get_store_stats,
     list_papers,
     reset_store,
+    recommend_similar,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "get_store_stats",
     "list_papers",
     "reset_store",
+    "recommend_similar",
 ]

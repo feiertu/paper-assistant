@@ -6,6 +6,9 @@
 
 通过 config.EMBEDDING_PROVIDER 用逗号分隔，例如 "openai,voyage"。
 两路维度统一为 1024，均做 L2 归一化以支持 cosine 检索。
+
+特性：
+- Embedding 缓存：相同文本 + provider 组合 24h 内不重复调用 API
 """
 
 from __future__ import annotations
@@ -15,6 +18,10 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 import config
+from src.cache import get_embed_cache, make_embed_key
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------- 后端实现 ----------
@@ -107,9 +114,14 @@ class Embedder:
         self._providers: List[str] = [p.strip() for p in raw.split(",") if p.strip()]
         self._model_name = model_name or config.EMBEDDING_MODEL
         self._backends: Dict[str, Any] = {}
+        self._cache = get_embed_cache() if config.CACHE_ENABLED else None
 
         for p in self._providers:
             self._backends[p] = self._build_backend(p)
+
+        logger.info("Embedder 初始化 providers=%s model=%s dim=%d cache=%s",
+                     self._providers, self._model_name, self.dim,
+                     "enabled" if self._cache else "disabled")
 
     def _build_backend(self, provider: str):
         if provider == "openai":
@@ -123,11 +135,61 @@ class Embedder:
     # ---------- 单后端接口 ----------
 
     def embed(self, texts: Sequence[str]) -> np.ndarray:
-        """用第一个 provider 做 embedding。单后端场景使用。"""
+        """用第一个 provider 做 embedding（带缓存）。
+
+        对每个 text 先查缓存，只对未命中文本调用 API，然后合并结果。
+        """
         if not texts:
             return np.zeros((0, config.EMBEDDING_DIM), dtype=np.float32)
-        primary = self._backends[self._providers[0]]
-        return primary.embed(list(texts))
+        provider = self._providers[0]
+        return self._embed_with_cache(list(texts), provider)
+
+    def _embed_with_cache(self, texts: List[str], provider: str) -> np.ndarray:
+        """带缓存的 embedding：查缓存 + 调 API + 写缓存。"""
+        dim = config.EMBEDDING_DIM
+        if not self._cache:
+            return self._backends[provider].embed(texts)
+
+        # 1) 查缓存
+        cached_vecs: Dict[int, np.ndarray] = {}
+        uncached_indices: List[int] = []
+        uncached_texts: List[str] = []
+        for i, text in enumerate(texts):
+            key = make_embed_key(text, provider)
+            val = self._cache.get(key)
+            if val is not None:
+                cached_vecs[i] = np.asarray(val, dtype=np.float32)
+            else:
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+
+        # 2) 全部命中
+        if not uncached_texts:
+            logger.debug("Embedding 缓存全命中: %d/%d", len(texts), len(texts))
+            result = np.zeros((len(texts), dim), dtype=np.float32)
+            for i, vec in cached_vecs.items():
+                result[i] = vec
+            return result
+
+        # 3) 调 API
+        if uncached_texts:
+            logger.info("Embedding: %d cached, %d via API (%s)",
+                         len(cached_vecs), len(uncached_texts), provider)
+        backend = self._backends[provider]
+        new_vecs = backend.embed(uncached_texts)
+
+        # 4) 写缓存
+        for text, vec in zip(uncached_texts, new_vecs):
+            key = make_embed_key(text, provider)
+            self._cache.set(key, vec.tolist())
+
+        # 5) 合并
+        result = np.zeros((len(texts), dim), dtype=np.float32)
+        for i, vec in cached_vecs.items():
+            result[i] = vec
+        for j, idx in enumerate(uncached_indices):
+            result[idx] = new_vecs[j]
+        return result
 
     def embed_query(self, text: str) -> List[float]:
         """单查询 embedding（用第一个 provider）。"""
@@ -139,7 +201,7 @@ class Embedder:
         """多后端同时 embed，返回 {provider_name: np.ndarray}。"""
         if not texts:
             return {p: np.zeros((0, config.EMBEDDING_DIM), dtype=np.float32) for p in self._providers}
-        return {p: backend.embed(list(texts)) for p, backend in self._backends.items()}
+        return {p: self._embed_with_cache(list(texts), p) for p in self._providers}
 
     def embed_query_all(self, text: str) -> Dict[str, List[float]]:
         """多后端单查询 embedding。"""

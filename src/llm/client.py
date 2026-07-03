@@ -2,6 +2,11 @@
 
 只暴露 LLMClient 一个类，统一的 chat / complete_with_context 入口。
 底层是 OpenAI 兼容协议（OpenAI / DeepSeek / 通义千问 / 任意 base_url 兼容服务）。
+
+特性：
+- 任务级模型分离：QA / summary / survey 可配置不同模型
+- LLM 响应缓存：相同 query+context 避免重复调用
+- 结构化日志
 """
 
 from __future__ import annotations
@@ -9,16 +14,20 @@ from __future__ import annotations
 from typing import Any, Dict, Generator, List, Optional
 
 import config
+from src.cache import get_llm_cache, make_llm_key, make_context_hash
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class LLMClient:
-    """简单的 OpenAI Chat 客户端封装。
+    """OpenAI Chat 客户端封装，支持缓存和任务级模型。
 
     用法：
         llm = LLMClient()
         text = llm.chat([{"role": "user", "content": "你好"}])
 
-        # 或者直接走 RAG：
+        # 或者直接走 RAG（自动缓存）：
         text = llm.complete_with_context(query, hits, lang="zh")
     """
 
@@ -28,7 +37,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> None:
-        from openai import OpenAI  # 延迟 import，避免 rag/store 不需要 key 时报错
+        from openai import OpenAI
 
         config.require_openai_key()
         self._client = OpenAI(
@@ -39,40 +48,56 @@ class LLMClient:
         self._temperature = temperature if temperature is not None else config.LLM_TEMPERATURE
         self._max_tokens = max_tokens or config.LLM_MAX_TOKENS
 
-    # ---------- 基础调用 ----------
+        # ── 任务级模型 ──
+        self._qa_model = config.LLM_QA_MODEL
+        self._summary_model = config.LLM_SUMMARY_MODEL
+        self._survey_model = config.LLM_SURVEY_MODEL
+
+        self._cache = get_llm_cache() if config.CACHE_ENABLED else None
+
+        logger.info(
+            "LLMClient 初始化 model=%s temp=%.2f max_tokens=%d cache=%s",
+            self._model, self._temperature, self._max_tokens,
+            "enabled" if self._cache else "disabled",
+        )
+
+    # ────────── 基础调用 ──────────
 
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        model: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """最原始的 chat 调用，返回 assistant 文本。"""
+        use_model = model or self._model
+        logger.debug("chat: model=%s msg_count=%d", use_model, len(messages))
         resp = self._client.chat.completions.create(
-            model=self._model,
+            model=use_model,
             messages=messages,
             temperature=self._temperature if temperature is None else temperature,
             max_tokens=self._max_tokens if max_tokens is None else max_tokens,
             **kwargs,
         )
-        return (resp.choices[0].message.content or "").strip()
+        result = (resp.choices[0].message.content or "").strip()
+        logger.debug("chat: result_len=%d tokens_used=%s", len(result),
+                      resp.usage.total_tokens if resp.usage else "?")
+        return result
 
     def chat_stream(
         self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        model: Optional[str] = None,
         **kwargs: Any,
     ):
-        """流式 chat 调用，逐 chunk yield 文本内容。
-
-        用法：
-            for chunk in llm.chat_stream(messages):
-                print(chunk, end="", flush=True)
-        """
+        """流式 chat 调用，逐 chunk yield 文本内容。"""
+        use_model = model or self._model
         resp = self._client.chat.completions.create(
-            model=self._model,
+            model=use_model,
             messages=messages,
             temperature=self._temperature if temperature is None else temperature,
             max_tokens=self._max_tokens if max_tokens is None else max_tokens,
@@ -83,7 +108,7 @@ class LLMClient:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-    # ---------- 高层封装 ----------
+    # ────────── 高层封装（带缓存） ──────────
 
     def complete_with_context(
         self,
@@ -92,21 +117,38 @@ class LLMClient:
         lang: str = "zh",
         max_words: int = 600,
     ) -> str:
-        """RAG 场景的一站式问答：拼 prompt → 调用 LLM → 返回答案文本。
+        """RAG 场景的一站式问答：拼 prompt → 调 LLM → 返回答案文本。
 
-        lang="zh" 用中文 prompt；"en" 用英文 prompt。
-        hits 由 retriever 给出，结构见 prompts.format_context。
+        先在缓存中查找，命中则直接返回。
         """
         from . import prompts
 
         context = prompts.format_context(hits)
+        ctx_hash = make_context_hash([h.get("document", "") for h in hits])
+
+        # ── 尝试缓存命中 ──
+        if self._cache:
+            cache_key = make_llm_key(query, ctx_hash, lang, "qa")
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info("LLM 缓存命中 (QA): query=%.60s", query)
+                return cached
+
         template = prompts.RAG_QA_PROMPT_ZH if lang == "zh" else prompts.RAG_QA_PROMPT_EN
         user_prompt = template.format(context=context, query=query)
         messages = [
             {"role": "system", "content": prompts.RAG_QA_SYSTEM},
             {"role": "user", "content": user_prompt},
         ]
-        return self.chat(messages)
+        logger.info("LLM 调用 (QA): model=%s query=%.60s hits=%d",
+                     self._qa_model, query, len(hits))
+        result = self.chat(messages, model=self._qa_model)
+
+        # ── 写入缓存 ──
+        if self._cache:
+            self._cache.set(cache_key, result)
+
+        return result
 
     def complete_with_context_stream(
         self,
@@ -114,12 +156,7 @@ class LLMClient:
         hits: List[Dict[str, Any]],
         lang: str = "zh",
     ) -> Generator[str, None, None]:
-        """RAG 场景的流式问答：同 complete_with_context，但逐 chunk 输出。
-
-        用法：
-            for chunk in llm.complete_with_context_stream(query, hits):
-                print(chunk, end="", flush=True)
-        """
+        """RAG 场景的流式问答（不走缓存，因为流式无法缓存）。"""
         from . import prompts
 
         context = prompts.format_context(hits)
@@ -129,36 +166,71 @@ class LLMClient:
             {"role": "system", "content": prompts.RAG_QA_SYSTEM},
             {"role": "user", "content": user_prompt},
         ]
-        yield from self.chat_stream(messages)
+        logger.info("LLM 流式调用 (QA): model=%s query=%.60s hits=%d",
+                     self._qa_model, query, len(hits))
+        yield from self.chat_stream(messages, model=self._qa_model)
 
     def summarize(self, text: str, lang: str = "zh", max_words: int = 200) -> str:
-        """单文档摘要：直接对原始文本调 LLM（不经过检索）。
-
-        rag 模块做"单文档摘要"时会自己 retrieve 全量 hits 后调这个。
-        """
+        """单文档摘要（带缓存）。"""
         from . import prompts
+
+        # ── 缓存 ──
+        if self._cache:
+            cache_key = make_llm_key(text[:200], make_context_hash([text]), lang, "summary")
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info("LLM 缓存命中 (summary): text=%.60s", text)
+                return cached
 
         template = prompts.SUMMARY_PROMPT_ZH if lang == "zh" else prompts.SUMMARY_PROMPT_EN
         user_prompt = template.format(text=text, max_words=max_words)
-        return self.chat([{"role": "user", "content": user_prompt}])
+        logger.info("LLM 调用 (summary): model=%s lang=%s text_len=%d",
+                     self._summary_model, lang, len(text))
+        result = self.chat([{"role": "user", "content": user_prompt}], model=self._summary_model)
+
+        if self._cache:
+            self._cache.set(cache_key, result)
+        return result
 
     def survey(self, hits: List[Dict[str, Any]], lang: str = "zh", max_words: int = 800) -> str:
-        """综述生成：把多文档 hits 拼成 context，调 LLM。"""
+        """综述生成（带缓存）。"""
         from . import prompts
 
         context = prompts.format_context(hits)
-        template = prompts.SURVEY_PROMPT_ZH if lang == "zh" else prompts.SURVEY_PROMPT_ZH  # 先只做中文
-        user_prompt = template.format(context=context, max_words=max_words)
-        return self.chat([{"role": "user", "content": user_prompt}])
+        ctx_hash = make_context_hash([h.get("document", "") for h in hits])
 
-    # ---------- 调试 ----------
+        # ── 缓存 ──
+        if self._cache:
+            cache_key = make_llm_key("survey", ctx_hash, lang, "survey")
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info("LLM 缓存命中 (survey): hits=%d", len(hits))
+                return cached
+
+        template = prompts.SURVEY_PROMPT_ZH if lang == "zh" else prompts.SURVEY_PROMPT_EN
+        user_prompt = template.format(context=context, max_words=max_words)
+        logger.info("LLM 调用 (survey): model=%s lang=%s hits=%d",
+                     self._survey_model, lang, len(hits))
+        result = self.chat([{"role": "user", "content": user_prompt}], model=self._survey_model)
+
+        if self._cache:
+            self._cache.set(cache_key, result)
+        return result
+
+    # ────────── 调试 ──────────
 
     @property
     def model(self) -> str:
         return self._model
 
+    @property
+    def cache_stats(self) -> Optional[dict]:
+        if self._cache:
+            return self._cache.stats
+        return None
 
-# ---------- 单例 ----------
+
+# ────────── 单例 ──────────
 
 _llm: Optional[LLMClient] = None
 
