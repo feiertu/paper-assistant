@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -55,9 +56,9 @@ st.sidebar.title("📚 Paper Assistant")
 
 page = st.sidebar.radio(
     "导航",
-    ["💬 RAG 问答", "📝 论文摘要", "📊 综述生成", "📚 论文列表",
-     "🔗 引用关系", "🔍 论文推荐", "📄 PDF 预览", "📥 数据入库",
-     "📤 数据导出", "🕐 查询历史", "⚙️ 系统管理"],
+    ["🤖 Agent 助手", "💬 RAG 问答", "📝 论文摘要", "📊 综述生成",
+     "📚 论文列表", "🔗 引用关系", "🔍 论文推荐", "📄 PDF 预览",
+     "📥 数据入库", "📤 数据导出", "🕐 查询历史", "⚙️ 系统管理"],
 )
 
 st.sidebar.divider()
@@ -71,6 +72,95 @@ except Exception:
 
 st.sidebar.caption(f"LLM: {config.LLM_MODEL}")
 st.sidebar.caption(f"Embedding: {config.EMBEDDING_PROVIDER}")
+
+# ══════════════════════════════════════════════
+#  页面 0: Agent 助手
+# ══════════════════════════════════════════════
+
+if page == "🤖 Agent 助手":
+    st.title("🤖 Agent 智能助手")
+
+    st.markdown("""
+    Agent 能够自主使用工具（搜索/摘要/对比/引用分析），进行**多步推理**，
+    处理复杂的研究问题。例如：
+    > "找出关于 RLBench 的论文，比较它们的核心方法，推荐相似的研究"
+    """)
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        query = st.text_area(
+            "输入你的研究问题",
+            placeholder="例如：找出引用 SpatialClaw 的论文，对比它们在 RLBench 上的表现",
+            height=80,
+        )
+    with col2:
+        lang = st.selectbox("语言", ["zh", "en"], format_func=lambda x: "中文" if x == "zh" else "English")
+        max_iter = st.slider("最大推理步数", 1, 20, 10)
+
+    if st.button("🤖 开始分析", type="primary", disabled=not query.strip()):
+        from src.agent.openai_agent import run_agent_stream
+
+        # 容器
+        reasoning_container = st.container()
+        answer_placeholder = st.empty()
+
+        step_count = 0
+        final_answer = ""
+
+        try:
+            for event in run_agent_stream(
+                query=query, lang=lang, max_iterations=max_iter,
+            ):
+                e = event if hasattr(event, 'model_dump') else event
+
+                if e.type == "thinking":
+                    with reasoning_container:
+                        st.caption(f"💭 {e.content}")
+
+                elif e.type == "tool_call":
+                    step_count += 1
+                    with reasoning_container:
+                        with st.expander(
+                            f"🔧 Step {step_count}: {e.tool}",
+                            expanded=True,
+                        ):
+                            if e.args:
+                                st.caption(f"参数: {json.dumps(e.args, ensure_ascii=False)}")
+                            st.info("执行中…")
+
+                elif e.type == "tool_result":
+                    with reasoning_container:
+                        result_text = e.result or ""
+                        if len(result_text) > 800:
+                            result_text = result_text[:800] + "…"
+                        st.caption(f"✅ {e.tool} 完成")
+                        st.text(result_text)
+
+                elif e.type == "error":
+                    with reasoning_container:
+                        st.warning(f"⚠️ {e.tool}: {e.message}")
+
+                elif e.type == "answer_chunk":
+                    final_answer += e.content
+                    answer_placeholder.markdown(final_answer)
+
+                elif e.type == "usage":
+                    st.caption(
+                        f"📊 Token: {e.total_tokens} | "
+                        f"工具调用: {e.steps} | "
+                        f"耗时: {e.duration_ms}ms"
+                    )
+
+                elif e.type == "done":
+                    pass  # 流结束
+
+        except Exception as ex:
+            st.error(f"Agent 执行错误: {ex}")
+
+        if final_answer.strip():
+            answer_placeholder.markdown(final_answer)
+        else:
+            st.warning("Agent 未能生成有效答案，请检查查询或论文数据。")
 
 # ══════════════════════════════════════════════
 #  页面 1: RAG 问答

@@ -108,6 +108,14 @@ API_AUTH_KEY: Optional[str] = _env("API_AUTH_KEY", "") or None  # 简单的 API 
 API_RATE_LIMIT: str = _env("API_RATE_LIMIT", "30/minute") or "30/minute"  # 全局限速
 API_CORS_ORIGINS: str = _env("API_CORS_ORIGINS", "*") or "*"  # 逗号分隔，生产应设具体域名
 
+# ---------- Agent ----------
+
+LLM_AGENT_MODEL: str = _env("LLM_AGENT_MODEL", "") or LLM_MODEL  # Agent 专用模型
+AGENT_MAX_ITERATIONS: int = _env_int("AGENT_MAX_ITERATIONS", 10)
+AGENT_TEMPERATURE: float = _env_float("AGENT_TEMPERATURE", 0.1)
+AGENT_MAX_CONTEXT_TOKENS: int = _env_int("AGENT_MAX_CONTEXT_TOKENS", 8000)
+AGENT_TOOL_RETRY: int = _env_int("AGENT_TOOL_RETRY", 2)
+
 # ---------- Voyage AI ----------
 
 VOYAGE_API_KEY: Optional[str] = _env("VOYAGE_API_KEY")
@@ -156,6 +164,8 @@ def summary() -> dict:
         "LLM_QA_MODEL": LLM_QA_MODEL,
         "LLM_SUMMARY_MODEL": LLM_SUMMARY_MODEL,
         "LLM_SURVEY_MODEL": LLM_SURVEY_MODEL,
+        "LLM_AGENT_MODEL": LLM_AGENT_MODEL,
+        "AGENT_MAX_ITERATIONS": AGENT_MAX_ITERATIONS,
         "OPENAI_API_KEY_SET": bool(OPENAI_API_KEY),
         "OPENAI_BASE_URL": OPENAI_BASE_URL,
         "VOYAGE_API_KEY_SET": bool(VOYAGE_API_KEY),

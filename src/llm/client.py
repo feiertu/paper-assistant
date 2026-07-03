@@ -217,6 +217,116 @@ class LLMClient:
             self._cache.set(cache_key, result)
         return result
 
+    # ────────── Agent / Tool Calling ──────────
+
+    def chat_raw(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """与 chat() 相同，但返回完整 message 对象（含 tool_calls）。
+
+        供 Agent 循环使用，需要从响应中提取 tool_calls 来执行工具。
+
+        Returns:
+            {"message": {"role": "assistant", "content": "...", "tool_calls": [...]},
+             "usage": {"total_tokens": N, ...}}
+        """
+        use_model = model or self._model
+        logger.debug("chat_raw: model=%s msg_count=%d tools=%d",
+                     use_model, len(messages), len(tools or []))
+        resp = self._client.chat.completions.create(
+            model=use_model,
+            messages=messages,
+            tools=tools or [],
+            temperature=self._temperature if temperature is None else temperature,
+            max_tokens=self._max_tokens if max_tokens is None else max_tokens,
+            **kwargs,
+        )
+        choice = resp.choices[0]
+        message: Dict[str, Any] = {
+            "role": "assistant",
+            "content": choice.message.content or "",
+        }
+        if choice.message.tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in choice.message.tool_calls
+            ]
+        usage = {}
+        if resp.usage:
+            usage = {
+                "total_tokens": resp.usage.total_tokens,
+                "prompt_tokens": resp.usage.prompt_tokens,
+                "completion_tokens": resp.usage.completion_tokens,
+            }
+        return {"message": message, "usage": usage}
+
+    def chat_raw_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """流式版 chat_raw，逐 chunk yield 完整 delta（含 tool_calls 增量）。
+
+        用法：
+            for chunk in llm.chat_raw_stream(messages, tools):
+                # chunk = {"delta": {"content": "...", "tool_calls": [...]}, "finish_reason": ...}
+        """
+        use_model = model or self._model
+        resp = self._client.chat.completions.create(
+            model=use_model,
+            messages=messages,
+            tools=tools or [],
+            temperature=self._temperature if temperature is None else temperature,
+            max_tokens=self._max_tokens if max_tokens is None else max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+            **kwargs,
+        )
+        for chunk in resp:
+            delta: Dict[str, Any] = {"content": ""}
+            choice = chunk.choices[0] if chunk.choices else None
+            if choice is None:
+                # usage chunk (stream_options enabled)
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    yield {"usage": {
+                        "total_tokens": usage.total_tokens,
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                    }}
+                continue
+            if choice.delta.content:
+                delta["content"] = choice.delta.content
+            if choice.delta.tool_calls:
+                delta["tool_calls"] = []
+                for tc in choice.delta.tool_calls:
+                    delta["tool_calls"].append({
+                        "index": tc.index,
+                        "id": tc.id,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        } if tc.function else {},
+                    })
+            yield {"delta": delta, "finish_reason": choice.finish_reason}
+
     # ────────── 调试 ──────────
 
     @property

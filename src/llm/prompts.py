@@ -166,6 +166,53 @@ The provided references do not contain enough information to answer this questio
 【Answer】"""
 
 
+# ---------- 论文对比（Agent 用） ----------
+
+COMPARE_PROMPT_ZH = """你是学术论文比较助手。请基于下面两篇论文的片段，用中文写一份结构化对比分析。
+
+要求：
+1. 用四段式：研究问题对比 / 方法对比 / 实验结果对比 / 结论与意义对比
+2. 明确指出两篇论文的相同点和不同点
+3. 不要编造片段中没有的信息
+4. 保留关键术语的英文原词
+
+【论文 A】
+{text1}
+
+【论文 B】
+{text2}
+
+【对比分析】"""
+
+COMPARE_PROMPT_EN = """You are an academic paper comparison assistant.
+Write a structured comparison of the two papers below in English.
+Use four sections: Problem Comparison / Method Comparison / Results Comparison / Significance Comparison.
+Clearly identify similarities and differences.
+Do not fabricate information not present in the excerpts.
+
+【Paper A】
+{text1}
+
+【Paper B】
+{text2}
+
+【Comparison】"""
+
+# ---------- tool 格式转换（Agent 用） ----------
+
+def format_context_compact(hits, max_chars_per_hit: int = 400) -> str:
+    """format_context 的精简版：用于 Agent tool 返回格式。"""
+    if not hits:
+        return "（无结果）"
+    blocks = []
+    for i, hit in enumerate(hits, 1):
+        meta = hit.get("metadata") or {}
+        section = meta.get("section_title") or meta.get("title") or ""
+        arxiv = meta.get("arxiv_id") or meta.get("source") or ""
+        doc = (hit.get("document") or "").strip()[:max_chars_per_hit]
+        blocks.append(f"[{i}] {arxiv} | {section}\n{doc}")
+    return "\n\n".join(blocks)
+
 # ---------- 工具函数：把检索命中拼成 context ----------
 
 def format_context(hits, max_chars_per_hit: int = 600) -> str:

@@ -17,6 +17,7 @@ data/processed/
 data/parsed/
 data/paper_assistant.db
 data/chroma_backup/
+tests/_test_data/
 *.pdf
 
 # 环境变量

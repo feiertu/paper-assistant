@@ -32,6 +32,7 @@ from src.rag import (
     summarize_paper,
     survey,
 )
+from src.agent import AgentQueryRequest, AgentQueryResponse, run_agent_stream as agent_run_stream
 from src.api.middleware import ApiKeyMiddleware, RateLimitMiddleware, parse_rate_limit
 from src.logging_config import get_logger
 
@@ -219,6 +220,63 @@ def rag_query_stream(req: RAGQueryRequest):
         for token in answer_rag_stream(req.query, top_k=req.top_k, lang=req.lang):
             yield f"data: {token}\n\n"
         yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+# ── Agent 多步推理 ──
+
+@app.post("/agent/query")
+def agent_query(req: AgentQueryRequest):
+    """Agent 非流式查询：收集所有事件后返回完整结果。"""
+    events = []
+    answer_parts = []
+    total_tokens = 0
+    steps = 0
+    duration_ms = 0
+
+    for event in agent_run_stream(
+        query=req.query,
+        lang=req.lang,
+        max_iterations=req.max_iterations,
+        enabled_tools=req.enabled_tools,
+    ):
+        events.append(event.model_dump())
+        if event.type == "answer_chunk":
+            answer_parts.append(event.content)
+        elif event.type == "usage":
+            total_tokens = event.total_tokens or 0
+            steps = event.steps or 0
+            duration_ms = event.duration_ms or 0
+
+    answer = "".join(answer_parts)
+    if not answer.strip():
+        answer = "Agent 未生成有效回答。请检查查询内容或已入库论文。"
+    return AgentQueryResponse(
+        query=req.query,
+        answer=answer,
+        reasoning_steps=events,
+        iterations=steps,
+        total_tokens=total_tokens,
+        duration_ms=duration_ms,
+    )
+
+
+@app.post("/agent/query/stream")
+def agent_query_stream(req: AgentQueryRequest):
+    """Agent 流式查询：SSE 事件流实时展示推理过程。
+
+    事件类型: thinking / tool_call / tool_result / answer_chunk / error / usage / done
+    """
+    def _gen():
+        for event in agent_run_stream(
+            query=req.query,
+            lang=req.lang,
+            max_iterations=req.max_iterations,
+            enabled_tools=req.enabled_tools,
+        ):
+            yield f"event: step\ndata: {json.dumps(event.model_dump(), ensure_ascii=False)}\n\n"
+        yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
