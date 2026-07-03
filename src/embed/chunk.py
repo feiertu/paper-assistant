@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -108,9 +109,6 @@ def find_parsed_dir() -> Path:
 
     优先 config.PARSED_DIR；找不到再回落到 src/data/parsed（早期版本遗留）。
     """
-    import config
-    from pathlib import Path
-
     primary = Path(config.PARSED_DIR)
     if primary.exists() and any(primary.rglob("*.json")):
         return primary
