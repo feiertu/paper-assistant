@@ -9,16 +9,17 @@ from __future__ import annotations
 import csv
 import io
 import json
+import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
 from src.cache import get_cache_stats
-from src.db import get_dao
+from src.db import get_dao, get_connection
 from src.rag import (
     answer_rag,
     answer_rag_stream,
@@ -36,6 +37,27 @@ from src.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# ── 启动配置校验 ──
+
+
+def _validate_config_on_startup() -> None:
+    """启动时校验关键配置，缺失则立即报错。"""
+    errors = []
+    if not config.OPENAI_API_KEY:
+        errors.append("OPENAI_API_KEY 未设置")
+    if "voyage" in config.EMBEDDING_PROVIDER and not config.VOYAGE_API_KEY:
+        errors.append("EMBEDDING_PROVIDER 包含 voyage 但 VOYAGE_API_KEY 未设置")
+    if not config.ARXIV_QUERY:
+        errors.append("ARXIV_QUERY 为空")
+    if errors:
+        msg = "启动配置校验失败:\n  - " + "\n  - ".join(errors)
+        logger.error(msg)
+        raise RuntimeError(msg)
+    logger.info("配置校验通过")
+
+
+_validate_config_on_startup()
+
 # ── App 实例 ──
 
 app = FastAPI(
@@ -44,23 +66,44 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# ── 中间件（顺序重要：CORS → 鉴权 → 限流） ──
+# ── 中间件（顺序重要：CORS → 请求日志 → 鉴权 → 限流） ──
 
+cors_origins = [o.strip() for o in config.API_CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=cors_origins,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# 请求日志中间件
+@app.middleware("http")
+async def request_log_middleware(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration_ms = round((time.time() - start) * 1000)
+    logger.info("%s %s → %d (%dms)",
+                request.method, request.url.path,
+                response.status_code, duration_ms)
+    return response
 
 app.add_middleware(ApiKeyMiddleware)
 
 max_req, rate_window = parse_rate_limit(config.API_RATE_LIMIT)
 app.add_middleware(RateLimitMiddleware, max_requests=max_req, window_seconds=rate_window)
 
-logger.info("API 服务启动: auth=%s rate_limit=%s",
+logger.info("API 服务启动: auth=%s rate_limit=%s cors=%s",
             "enabled" if config.API_AUTH_ENABLED else "disabled",
-            config.API_RATE_LIMIT)
+            config.API_RATE_LIMIT, config.API_CORS_ORIGINS)
+
+
+# ── 统一错误响应 ──
+
+def api_error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": status_code, "message": detail}},
+    )
 
 
 # ── 请求模型 ──
@@ -100,7 +143,54 @@ class IngestTextRequest(BaseModel):
 
 @app.get("/health")
 def health():
+    """浅层健康检查（用于 Docker HEALTHCHECK）。"""
     return {"status": "ok"}
+
+
+@app.get("/health/deep")
+def health_deep():
+    """深度健康检查：验证 DB / Chroma / LLM 连通性。"""
+    checks = {}
+    healthy = True
+
+    # 1) SQLite
+    try:
+        conn = get_connection()
+        conn.execute("SELECT 1")
+        conn.close()
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+        healthy = False
+
+    # 2) Chroma
+    try:
+        from src.store import get_store
+        store = get_store()
+        count = store.count()
+        checks["chroma"] = f"ok (count={count})"
+    except Exception as e:
+        checks["chroma"] = f"error: {e}"
+        healthy = False
+
+    # 3) LLM API key
+    checks["llm_key_set"] = bool(config.OPENAI_API_KEY)
+
+    # 4) Embedding provider
+    checks["embed_provider"] = config.EMBEDDING_PROVIDER
+
+    # 5) Cache
+    try:
+        cache_s = get_cache_stats()
+        checks["cache"] = cache_s
+    except Exception:
+        checks["cache"] = "unavailable"
+
+    status_code = 200 if healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "healthy" if healthy else "degraded", "checks": checks},
+    )
 
 
 @app.get("/config")
@@ -284,10 +374,15 @@ def queries_clear():
 # ── 收藏夹 ──
 
 @app.get("/collections")
-def collections_list():
+def collections_list(limit: int = 50, offset: int = 0):
     dao = get_dao("collection")
-    cols = dao.find_all()
-    return {"collections": [{"id": c.id, "name": c.name, "description": c.description, "paper_count": c.paper_count, "created_at": c.created_at} for c in cols]}
+    cols = dao.find_all(limit=limit, offset=offset)
+    return {
+        "collections": [{"id": c.id, "name": c.name, "description": c.description,
+                          "paper_count": c.paper_count, "created_at": c.created_at}
+                         for c in cols],
+        "total": dao.count(),
+    }
 
 
 class CreateCollectionRequest(BaseModel):
@@ -321,9 +416,11 @@ def collections_add_paper(collection_id: int, req: CollectionPaperRequest):
 
 
 @app.get("/collections/{collection_id}/papers")
-def collections_list_papers(collection_id: int):
+def collections_list_papers(collection_id: int, limit: int = 50, offset: int = 0):
     papers = get_dao("collection").list_papers(collection_id)
-    return {"papers": [p.to_dict() for p in papers]}
+    total = len(papers)
+    papers = papers[offset:offset + limit]
+    return {"papers": [p.to_dict() for p in papers], "total": total}
 
 
 # ── 缓存状态 ──
@@ -538,11 +635,14 @@ def store_restore(req: RestoreRequest):
 # ── 入口 ──
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
+    is_dev = os.getenv("PAPER_ASSISTANT_ENV", "dev") == "dev"
     uvicorn.run(
         "src.api.main:app",
         host=config.API_HOST,
         port=config.API_PORT,
-        reload=True,
+        reload=is_dev,
+        workers=1 if is_dev else None,  # 生产用 --workers 参数控制
     )

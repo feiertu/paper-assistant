@@ -177,12 +177,17 @@ class CollectionDAO:
             conn.commit()
             return cur.lastrowid
 
-    def find_all(self) -> List[Collection]:
+    def find_all(self, limit: int = 100, offset: int = 0) -> List[Collection]:
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM collections ORDER BY created_at DESC"
+                "SELECT * FROM collections ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
             return [Collection.from_row(r) for r in rows]
+
+    def count(self) -> int:
+        with get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
 
     def delete(self, collection_id: int) -> bool:
         with get_connection() as conn:

@@ -9,10 +9,28 @@ services:
       - "127.0.0.1:8501:8501"
     volumes:
       - paper_data:/app/data
+      - paper_logs:/app/logs
     env_file:
       - .env
     restart: unless-stopped
+    # 资源限制（调整根据服务器配置）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   paper_data:
+    driver: local
+  paper_logs:
     driver: local

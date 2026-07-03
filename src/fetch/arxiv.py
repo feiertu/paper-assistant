@@ -1,8 +1,20 @@
-import requests
+"""arXiv API 元数据抓取。
+
+通过 arXiv API 获取论文元数据（标题、作者、摘要、PDF 链接），
+并支持自动保存到 SQLite 数据库。
+"""
+
+from __future__ import annotations
+
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional
 
+import requests
+
 import config
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def fetch_arxiv_metadata(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
@@ -17,37 +29,39 @@ def fetch_arxiv_metadata(query: Optional[str] = None, max_results: Optional[int]
         "sortOrder": "descending",
     }
 
+    logger.info("arXiv fetch: query=%s max=%d", q, n)
     response = requests.get(base_url, params=params, timeout=config.ARXIV_REQUEST_TIMEOUT)
 
     if response.status_code != 200:
-        print(f"API ERROr:{response.status_code}")
+        logger.error("arXiv API 返回 %d", response.status_code)
         return []
 
     return parse_xml(response.content)
+
 
 def parse_xml(xml_content):
     root = ET.fromstring(xml_content)
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
     papers = []
-    
+
     for entry in root.findall('atom:entry', ns):
         id_url = entry.find('atom:id', ns).text
         arxiv_id = id_url.split('/')[-1]
-        
+
         title = entry.find('atom:title', ns).text.strip().replace('\n', ' ')
         summary = entry.find('atom:summary', ns).text.strip()
         authors = [a.find('atom:name', ns).text for a in entry.findall('atom:author', ns)]
         published = entry.find('atom:published', ns).text
-        
+
         pdf_url = None
         for link in entry.findall('atom:link', ns):
             href = link.attrib.get('href', '')
-            if (link.attrib.get('type') == 'application/pdf' or 
-                href.endswith('.pdf') or 
+            if (link.attrib.get('type') == 'application/pdf' or
+                href.endswith('.pdf') or
                 link.attrib.get('title') == 'pdf'):
                 pdf_url = href
                 break
-        
+
         papers.append({
             'id': arxiv_id,
             'title': title,
@@ -56,18 +70,13 @@ def parse_xml(xml_content):
             'published': published,
             'pdf_url': pdf_url
         })
-    
+
+    logger.info("arXiv fetch: 获取 %d 篇论文", len(papers))
     return papers
-    
+
+
 def save_metadata_to_db(papers: List[Dict]) -> int:
-    """将 arXiv 元数据保存到 SQLite 数据库。
-
-    Args:
-        papers: fetch_arxiv_metadata() 返回的论文列表
-
-    Returns:
-        成功保存的数量
-    """
+    """将 arXiv 元数据保存到 SQLite 数据库。"""
     from src.db import Paper, get_dao
 
     paper_dao = get_dao("paper")
@@ -87,20 +96,16 @@ def save_metadata_to_db(papers: List[Dict]) -> int:
             ))
             saved += 1
         except Exception as e:
-            print(f"[WARN] 保存元数据失败 {p.get('id')}: {e}")
+            logger.warning("保存元数据失败 %s: %s", p.get("id"), e)
     return saved
 
 
 def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
-    """抓取 arXiv 元数据并保存到数据库。
-
-    Returns:
-        抓取到的论文列表
-    """
+    """抓取 arXiv 元数据并保存到数据库。"""
     papers = fetch_arxiv_metadata(query=query, max_results=max_results)
     if papers:
         saved = save_metadata_to_db(papers)
-        print(f"已保存 {saved}/{len(papers)} 条元数据到数据库")
+        logger.info("已保存 %d/%d 条元数据到数据库", saved, len(papers))
     return papers
 
 

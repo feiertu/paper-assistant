@@ -10,10 +10,13 @@ venv/
 env/
 .venv/
 
-# 数据文件（不要 commit 大的 PDF）
+# 数据文件（不要 commit 运行时数据）
 data/raw/
 data/chroma_db/
 data/processed/
+data/parsed/
+data/paper_assistant.db
+data/chroma_backup/
 *.pdf
 
 # 环境变量

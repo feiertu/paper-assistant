@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import config
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def merge_spans_by_line(blocks: Dict) -> List[Dict]:
     lines = []

@@ -217,21 +217,25 @@ END;
 
 # ── 初始化 ──
 
+import threading as _threading
+
 _initialized = False
+_init_lock = _threading.Lock()
 
 
 def get_connection() -> sqlite3.Connection:
-    """获取数据库连接（自动初始化）。"""
+    """获取数据库连接（线程安全自动初始化）。"""
     global _initialized
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    if not _initialized:
-        conn.executescript(DDL)
-        conn.commit()
-        _initialized = True
+    with _init_lock:
+        if not _initialized:
+            conn.executescript(DDL)
+            conn.commit()
+            _initialized = True
     return conn
 
 

@@ -23,9 +23,13 @@ import requests
 from lxml import etree
 
 from .schemas import Figure, PaperMetadata, ParsedPaper, Section, Table
+from src.logging_config import get_logger
 
-# GROBID 默认地址
-GROBID_BASE_URL = "http://localhost:8070"
+logger = get_logger(__name__)
+
+# GROBID 地址（通过环境变量 PAPER_ASSISTANT_GROBID_URL 覆盖）
+_GROBID_BASE_URL = "PAPER_ASSISTANT_GROBID_URL"
+GROBID_BASE_URL = __import__('os').getenv(_GROBID_BASE_URL, "http://localhost:8070")
 FULLTEXT_ENDPOINT = f"{GROBID_BASE_URL}/api/processFulltextDocument"
 
 # TEI 命名空间
@@ -88,7 +92,7 @@ def parse_with_grobid(
     endpoint = f"{base_url or GROBID_BASE_URL}/api/processFulltextDocument"
     pdf_file = Path(pdf_path)
     if not pdf_file.exists():
-        print(f"[GROBID] 文件不存在: {pdf_path}")
+        logger.warning("文件不存在: %s", pdf_path)
         return None
 
     for attempt in range(1, retries + 1):
@@ -110,10 +114,10 @@ def parse_with_grobid(
         except Exception as e:
             if attempt < retries:
                 wait = 2 ** attempt
-                print(f"[GROBID] 第 {attempt}/{retries} 次请求失败，{wait}s 后重试: {e}")
+                logger.warning("第 %d/%d 次请求失败，%ds 后重试: %s", attempt, retries, wait, e)
                 time.sleep(wait)
             else:
-                print(f"[GROBID] 解析失败 ({retries} 次重试): {e}")
+                logger.error("解析失败 (%d 次重试): %s", retries, e)
                 return None
 
     return None

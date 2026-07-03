@@ -16,6 +16,9 @@ import requests
 from requests.exceptions import RequestException
 
 import config
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 DATA_DIR: Path = config.RAW_PDF_DIR
 
@@ -67,13 +70,13 @@ def download_with_resume(
     if file_path.exists() and total_size is not None:
         local_size = file_path.stat().st_size
         if local_size == total_size:
-            print(f"[OK] 已存在（完整）: {arxiv_id}")
+            logger.info("已存在（完整）: %s", arxiv_id)
             return True
         resume_pos = local_size
-        print(f"[RESUME] {arxiv_id}: 已下载 {local_size}/{total_size} bytes，续传中…")
+        logger.info("[RESUME] %s: 已下载 %d/%d bytes，续传中…", arxiv_id, local_size, total_size)
     elif file_path.exists():
         # 无法获取 Content-Length，保守处理：删除重下
-        print(f"[WARN] 无法获取文件大小，删除已有文件重新下载: {arxiv_id}")
+        logger.warning("无法获取文件大小，删除已有文件重新下载: %s", arxiv_id)
         file_path.unlink()
         resume_pos = 0
     else:
@@ -85,14 +88,14 @@ def download_with_resume(
             _stream_download(
                 pdf_url, file_path, resume_pos, chunk_retries=chunk_retries
             )
-            print(f"[OK] 下载成功: {arxiv_id}")
+            logger.info("下载成功: %s", arxiv_id)
             return True
         except Exception as e:
             if attempt < max_retries:
                 wait = 2 ** attempt  # 指数退避: 2, 4, 8 秒
-                print(
-                    f"[RETRY] {arxiv_id}: 第 {attempt}/{max_retries} 次重试失败，"
-                    f"{wait}s 后重试… ({e})"
+                logger.warning(
+                    "[RETRY] %s: 第 %d/%d 次重试失败，%ds 后重试… (%s)",
+                    arxiv_id, attempt, max_retries, wait, e,
                 )
                 time.sleep(wait)
                 # 刷新断点位置
@@ -101,7 +104,7 @@ def download_with_resume(
                 else:
                     resume_pos = 0
             else:
-                print(f"[FAIL] {arxiv_id}: {max_retries} 次重试均失败: {e}")
+                logger.error("[FAIL] %s: %d 次重试均失败: %s", arxiv_id, max_retries, e)
                 return False
 
     return False
@@ -184,7 +187,7 @@ def batch_download(
     results = {"success": [], "failed": []}
 
     for i, paper in enumerate(papers):
-        print(f"[{i+1}/{len(papers)}] 下载 {paper['id']}…")
+        logger.info("[%d/%d] 下载 %s…", i + 1, len(papers), paper["id"])
         if download_with_resume(paper["pdf_url"], paper["id"], dest_dir=dest_dir):
             results["success"].append(paper["id"])
         else:
@@ -200,7 +203,7 @@ if __name__ == "__main__":
 
     query = config.ARXIV_QUERY
     max_results = config.ARXIV_MAX_RESULTS
-    print(f"[fetch] query={query!r}, max_results={max_results}")
+    logger.info("[fetch] query=%s max_results=%d", query, max_results)
     papers = fetch_arxiv_metadata(query, max_results=max_results)
     results = batch_download(papers, delay=config.PDF_DOWNLOAD_DELAY)
-    print(f"成功: {len(results['success'])}, 失败: {len(results['failed'])}")
+    logger.info("成功: %d, 失败: %d", len(results["success"]), len(results["failed"]))
