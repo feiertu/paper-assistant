@@ -1,18 +1,41 @@
 #!/bin/bash
 set -e
 
+# 进程管理：trap 确保退出时清理所有子进程
+cleanup() {
+    echo "==> 收到退出信号，清理子进程…"
+    [ -n "$FASTAPI_PID" ] && kill "$FASTAPI_PID" 2>/dev/null || true
+    [ -n "$STREAMLIT_PID" ] && kill "$STREAMLIT_PID" 2>/dev/null || true
+    wait
+    echo "==> 已退出"
+}
+trap cleanup SIGTERM SIGINT SIGQUIT
+
+# ── FastAPI ──
 WORKERS=${UVICORN_WORKERS:-2}
-echo "==> Starting FastAPI on :8000 (workers=$WORKERS)"
+echo "==> 启动 FastAPI on :8000 (workers=$WORKERS)"
 uvicorn src.api.main:app \
     --host 0.0.0.0 \
     --port 8000 \
     --workers "$WORKERS" \
     --log-level info \
     --no-access-log &
+FASTAPI_PID=$!
 
-echo "==> Starting Streamlit on :8501"
-exec streamlit run ui/app.py \
+# ── Streamlit ──
+echo "==> 启动 Streamlit on :8501"
+streamlit run ui/app.py \
     --server.address 0.0.0.0 \
     --server.port 8501 \
     --server.headless true \
-    --browser.gatherUsageStats false
+    --browser.gatherUsageStats false &
+STREAMLIT_PID=$!
+
+# ── 监控子进程健康 ──
+while kill -0 "$FASTAPI_PID" 2>/dev/null && kill -0 "$STREAMLIT_PID" 2>/dev/null; do
+    sleep 5
+done
+
+echo "==> ⚠️ 子进程意外退出，容器将重启"
+cleanup
+exit 1

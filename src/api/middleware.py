@@ -89,8 +89,16 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # 鉴权已启用但 KEY 为空：拒绝所有请求（配置错误）
+        if not self._api_key:
+            logger.error("API_AUTH_ENABLED=true 但 API_AUTH_KEY 未设置，拒绝所有请求")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "服务器配置错误：API 鉴权密钥未设置"},
+            )
+
         client_key = request.headers.get("X-API-Key", "")
-        if not self._api_key or client_key != self._api_key:
+        if client_key != self._api_key:
             logger.warning("鉴权失败: ip=%s path=%s",
                            request.client.host if request.client else "?",
                            request.url.path)

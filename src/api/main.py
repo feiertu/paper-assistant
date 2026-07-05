@@ -54,6 +54,18 @@ def _validate_config_on_startup() -> None:
         msg = "启动配置校验失败:\n  - " + "\n  - ".join(errors)
         logger.error(msg)
         raise RuntimeError(msg)
+
+    # 软警告：默认模型不是 OpenAI 原生模型，但 base_url 未改
+    if (not config.OPENAI_BASE_URL
+            and config.LLM_MODEL not in ("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo")
+            and not config.LLM_MODEL.startswith("gpt-")):
+        logger.warning(
+            "⚠️  LLM_MODEL=%s 但 OPENAI_BASE_URL 未设置，"
+            "将使用 OpenAI 默认地址 https://api.openai.com/v1，可能不兼容。"
+            "如果是国产模型，请在 .env 中设置 OPENAI_BASE_URL",
+            config.LLM_MODEL,
+        )
+
     logger.info("配置校验通过")
 
 
@@ -67,12 +79,33 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-# ── 中间件（顺序重要：CORS → 请求日志 → 鉴权 → 限流） ──
+# ── 请求体大小限制（防止大文件上传攻击） ──
+_MAX_BODY_SIZE = 50 * 1024 * 1024  # 50MB
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    """拒绝超过 MAX_BODY_SIZE 的请求，在读 body 之前拦截。"""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_BODY_SIZE:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"请求体过大，最大允许 {_MAX_BODY_SIZE // 1024 // 1024}MB"},
+        )
+    return await call_next(request)
+
+
+# ── 中间件（顺序重要：body size → CORS → 请求日志 → 鉴权 → 限流） ──
 
 cors_origins = [o.strip() for o in config.API_CORS_ORIGINS.split(",") if o.strip()]
+if not cors_origins:
+    logger.warning(
+        "⚠️  CORS origins 未设置！API 将拒绝所有跨域请求。"
+        " 生产环境请在 .env 中设置 API_CORS_ORIGINS=你的域名"
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=cors_origins if cors_origins else [],
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -505,7 +538,14 @@ def cache_clear(kind: str = Query("all", description="缓存类型: all / llm / 
 @app.get("/papers/{arxiv_id}/pdf")
 def papers_pdf(arxiv_id: str):
     """获取 PDF 文件（用于在线预览）。"""
-    pdf_path = config.RAW_PDF_DIR / f"{arxiv_id}.pdf"
+    import re
+    # 安全校验：arxiv_id 必须匹配合法格式，防止目录遍历攻击
+    if not re.match(r'^[\w.-]+$', arxiv_id) or '..' in arxiv_id:
+        raise HTTPException(status_code=400, detail=f"无效的 arxiv_id: {arxiv_id}")
+    pdf_path = (config.RAW_PDF_DIR / f"{arxiv_id}.pdf").resolve()
+    # 确保路径在 RAW_PDF_DIR 下（二次防护目录遍历）
+    if not str(pdf_path).startswith(str(config.RAW_PDF_DIR.resolve())):
+        raise HTTPException(status_code=400, detail=f"非法的 PDF 路径: {arxiv_id}")
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail=f"PDF 不存在: {arxiv_id}")
     return FileResponse(

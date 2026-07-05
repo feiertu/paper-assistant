@@ -24,12 +24,12 @@ from lxml import etree
 
 from .schemas import Figure, PaperMetadata, ParsedPaper, Section, Table
 from src.logging_config import get_logger
+import config
 
 logger = get_logger(__name__)
 
-# GROBID 地址（通过环境变量 PAPER_ASSISTANT_GROBID_URL 覆盖）
-_GROBID_BASE_URL = "PAPER_ASSISTANT_GROBID_URL"
-GROBID_BASE_URL = __import__('os').getenv(_GROBID_BASE_URL, "http://localhost:8070")
+# GROBID 地址（通过环境变量 PAPER_ASSISTANT_GROBID_URL 覆盖，由 config 模块统一管理）
+GROBID_BASE_URL = config._env("PAPER_ASSISTANT_GROBID_URL", "http://localhost:8070") or "http://localhost:8070"
 FULLTEXT_ENDPOINT = f"{GROBID_BASE_URL}/api/processFulltextDocument"
 
 # TEI 命名空间

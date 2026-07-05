@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+import config  # noqa: F401 — 确保数据目录已创建
+from src.logging_config import get_logger
+
 from .schema import Collection, Paper, QueryRecord, get_connection
+
+logger = get_logger(__name__)
 
 
 # ══════════════════════════════════════════════
@@ -282,6 +287,7 @@ class CitationDAO:
                 conn.commit()
                 return True
             except Exception:
+                logger.warning("引用插入失败: %s → %s", citing_arxiv_id, cited_arxiv_id)
                 return False
 
     def batch_insert(self, rows: list) -> int:
@@ -298,6 +304,7 @@ class CitationDAO:
                     )
                     count += 1
                 except Exception:
+                    logger.warning("批量引用插入跳过: %s → %s", citing_arxiv_id, cited_arxiv_id)
                     pass
             conn.commit()
             return count

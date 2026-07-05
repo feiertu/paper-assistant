@@ -13,7 +13,10 @@ import config
 from src.db import Paper, PaperDAO, QueryDAO, QueryRecord, get_dao
 from src.embed import get_embedder, split_doc, rrf_rerank
 from src.embed.chunk import iter_doc_files, find_parsed_dir, split_text
+from src.logging_config import get_logger
 from src.store import VectorStore, get_store
+
+logger = get_logger(__name__)
 
 
 def _get_store() -> VectorStore:
@@ -138,7 +141,7 @@ def ingest_parsed_dir(
             cite_result = batch_extract_citations(arxiv_ids)
             citation_count = cite_result.get("citations", 0)
         except Exception:
-            pass  # 引用提取失败不影响主流程
+            logger.warning("引用提取失败，跳过（不影响数据入库）", exc_info=True)
 
         return {
             "status": "ok",
@@ -272,7 +275,7 @@ def answer_rag(
         for pid in paper_ids:
             query_dao.link_paper(qid, pid)
     except Exception:
-        pass  # 历史记录失败不阻塞主流程
+        logger.warning("查询历史记录失败", exc_info=True)
 
     return answer
 

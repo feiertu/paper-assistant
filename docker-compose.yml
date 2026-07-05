@@ -4,16 +4,16 @@ services:
   paper-assistant:
     build: .
     container_name: paper-assistant
-    ports:
-      - "127.0.0.1:8000:8000"
-      - "127.0.0.1:8501:8501"
+    expose:
+      - "8000"
+      - "8501"
     volumes:
       - paper_data:/app/data
       - paper_logs:/app/logs
+      - certbot_www:/var/www/certbot:ro
     env_file:
       - .env
     restart: unless-stopped
-    # 资源限制（调整根据服务器配置）
     deploy:
       resources:
         limits:
@@ -29,8 +29,39 @@ services:
       retries: 3
       start_period: 15s
 
+  nginx:
+    image: nginx:stable-alpine
+    container_name: paper-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/paper-assistant.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot_certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+      - ./nginx/options-ssl-nginx.conf:/etc/letsencrypt/options-ssl-nginx.conf:ro
+    depends_on:
+      paper-assistant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Certbot 用于自动申请/续期 Let's Encrypt 证书
+  # 首次运行: docker compose run --rm certbot certonly --webroot ...
+  certbot:
+    image: certbot/certbot:latest
+    container_name: paper-certbot
+    volumes:
+      - certbot_certs:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h; done'"
+    restart: unless-stopped
+
 volumes:
   paper_data:
     driver: local
   paper_logs:
+    driver: local
+  certbot_certs:
+    driver: local
+  certbot_www:
     driver: local

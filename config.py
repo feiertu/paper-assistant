@@ -106,7 +106,7 @@ CACHE_EMBED_TTL: int = _env_int("CACHE_EMBED_TTL", 86400)   # Embedding 缓存 2
 API_AUTH_ENABLED: bool = _env_bool("API_AUTH_ENABLED", False)
 API_AUTH_KEY: Optional[str] = _env("API_AUTH_KEY", "") or None  # 简单的 API Key 鉴权
 API_RATE_LIMIT: str = _env("API_RATE_LIMIT", "30/minute") or "30/minute"  # 全局限速
-API_CORS_ORIGINS: str = _env("API_CORS_ORIGINS", "*") or "*"  # 逗号分隔，生产应设具体域名
+API_CORS_ORIGINS: str = _env("API_CORS_ORIGINS", "") or ""  # 逗号分隔，生产应设具体域名
 
 # ---------- Agent ----------
 
