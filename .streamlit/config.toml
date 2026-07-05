@@ -1,0 +1,15 @@
+[server]
+enableCORS = true
+enableXsrfProtection = false
+enableWebsocketCompression = true
+
+[browser]
+serverAddress = feiertu.xyz
+gatherUsageStats = false
+
+[theme]
+primaryColor = #2563eb
+backgroundColor = #ffffff
+secondaryBackgroundColor = #f8fafc
+textColor = #1e293b
+font = sans serif

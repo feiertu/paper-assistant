@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -134,11 +135,24 @@ API_PORT: int = _env_int("API_PORT", 8000)
 
 UI_TITLE: str = _env("UI_TITLE", "📚 Paper Assistant") or "📚 Paper Assistant"
 
+# ---------- 日志 ----------
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(str(LOG_DIR / "app.log"), encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("paper-assistant")
+logger.info("Paper Assistant started")
+
 
 # ---------- 校验 ----------
 
 def require_openai_key() -> str:
-    """需要 OpenAI key 的地方（embed / llm）调用，缺失则立即报错。"""
     if not OPENAI_API_KEY:
         raise RuntimeError(
             "未配置 OPENAI_API_KEY。请在 .env 中设置，或导出环境变量。"
@@ -147,7 +161,6 @@ def require_openai_key() -> str:
 
 
 def summary() -> dict:
-    """打印/调试用：返回当前生效的配置快照（脱敏）。"""
     return {
         "PROJECT_ROOT": str(PROJECT_ROOT),
         "DATA_DIR": str(DATA_DIR),
@@ -156,9 +169,9 @@ def summary() -> dict:
         "ARXIV_MAX_RESULTS": ARXIV_MAX_RESULTS,
         "CHUNK_SIZE": CHUNK_SIZE,
         "CHUNK_OVERLAP": CHUNK_OVERLAP,
-        "EMBEDDING_PROVIDER": EMBEDDING_PROVIDER,
-        "EMBEDDING_MODEL": EMBEDDING_MODEL,
-        "EMBEDDING_DIM": EMBEDDING_DIM,
+        "EMBEDDING_PROVIDER": EMBDDING_PROVIDER,
+        "EMBEDDING_MODEL": EMBDDING_MODEL,
+        "EMBEDDING_DIM": EMBDDING_DIM,
         "RRF_TOP_N": RRF_TOP_N,
         "LLM_MODEL": LLM_MODEL,
         "LLM_QA_MODEL": LLM_QA_MODEL,
