@@ -33,7 +33,10 @@ from src.rag import (
     survey,
 )
 from src.agent import AgentQueryRequest, AgentQueryResponse, run_agent_stream as agent_run_stream
-from src.api.middleware import ApiKeyMiddleware, RateLimitMiddleware, parse_rate_limit
+from src.api.middleware import (
+    ApiKeyMiddleware, RateLimitMiddleware, OwnerMiddleware,
+    parse_rate_limit, get_owner_id,
+)
 from src.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -122,6 +125,7 @@ async def request_log_middleware(request: Request, call_next):
     return response
 
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(OwnerMiddleware)
 
 max_req, rate_window = parse_rate_limit(config.API_RATE_LIMIT)
 app.add_middleware(RateLimitMiddleware, max_requests=max_req, window_seconds=rate_window)
@@ -355,15 +359,13 @@ class ArxivFetchRequest(BaseModel):
 
 
 @app.post("/arxiv/fetch")
-def arxiv_fetch(req: ArxivFetchRequest):
-    """抓取 arXiv 论文：搜索 → 保存元数据。
-
-    返回找到的论文列表及其 ID。
-    """
+def arxiv_fetch(req: ArxivFetchRequest, request: Request):
+    """抓取 arXiv 论文：搜索 → 保存元数据。"""
     from src.fetch.arxiv import fetch_and_persist
 
+    owner_id = get_owner_id(request)
     query = req.query or None
-    papers = fetch_and_persist(query=query, max_results=req.max_results)
+    papers = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
     return {
         "status": "ok",
         "count": len(papers),
@@ -437,14 +439,15 @@ class ArxivPipelineRequest(BaseModel):
 
 
 @app.post("/arxiv/pipeline")
-def arxiv_pipeline(req: ArxivPipelineRequest):
+def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
     """一键管道：搜索 → 下载 → 解析 → 入库。"""
+    owner_id = get_owner_id(request)
     steps = []
 
     # 1. 搜索并保存元数据
     from src.fetch.arxiv import fetch_and_persist
     query = req.query or None
-    papers = fetch_and_persist(query=query, max_results=req.max_results)
+    papers = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
     steps.append({"step": "fetch", "count": len(papers)})
     if not papers:
         return {"status": "ok", "steps": steps, "message": "arXiv 搜索无结果"}
@@ -477,7 +480,7 @@ def arxiv_pipeline(req: ArxivPipelineRequest):
 
     # 4. 入库
     if req.auto_ingest and parsed_cnt > 0:
-        result = ingest_parsed_dir()
+        result = ingest_parsed_dir(owner_id=owner_id)
         ingest_count = result.get("papers", 0)
         steps.append({"step": "ingest", "papers": ingest_count,
                       "chunks": result.get("chunks", 0)})
@@ -486,15 +489,16 @@ def arxiv_pipeline(req: ArxivPipelineRequest):
 
 
 @app.post("/arxiv/process-pending")
-def arxiv_process_pending():
+def arxiv_process_pending(request: Request):
     """处理所有 pending 状态论文：下载 PDF → 解析 → 入库。"""
     from src.db import get_dao
     from src.fetch.download_pdf import download_with_resume
     import json as _json
     from src.parse.pdf import parse_pdf_structure
 
+    owner_id = get_owner_id(request)
     dao = get_dao("paper")
-    all_papers = dao.find_all(limit=200)
+    all_papers = dao.find_all(limit=200, owner_id=owner_id)
     pending = [p for p in all_papers if p.ingest_status == "pending" and p.pdf_url]
     if not pending:
         return {"status": "ok", "processed": 0, "message": "没有待处理的论文"}
@@ -529,7 +533,7 @@ def arxiv_process_pending():
     # 3. 入库
     ingest_result = {"papers": 0, "chunks": 0}
     if parsed_cnt > 0:
-        result = ingest_parsed_dir()
+        result = ingest_parsed_dir(owner_id=owner_id)
         if "error" not in result:
             ingest_result = result
 

@@ -110,6 +110,33 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class OwnerMiddleware(BaseHTTPMiddleware):
+    """多用户隔离中间件。
+
+    从 cookie (paper_session) 提取 owner_id，注入到 request.state.owner_id。
+    白名单路径跳过。
+    """
+
+    _OWNER_WHITELIST = {"/health", "/api/docs", "/api/redoc", "/api/openapi.json"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in self._OWNER_WHITELIST:
+            request.state.owner_id = ""
+            return await call_next(request)
+
+        # 优先从 cookie 读取，其次从 X-Owner-Id 头（Streamlit 内部调用）
+        owner = request.cookies.get(config.SESSION_COOKIE, "")
+        if not owner:
+            owner = request.headers.get("X-Owner-Id", "")
+        request.state.owner_id = owner
+        return await call_next(request)
+
+
+def get_owner_id(request: Request) -> str:
+    """从请求中提取 owner_id。"""
+    return getattr(request.state, "owner_id", "")
+
+
 def parse_rate_limit(limit_str: str) -> tuple:
     """解析限流字符串为 (requests, seconds)。
 

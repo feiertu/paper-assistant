@@ -234,6 +234,7 @@ def rrf_rerank(
     top_k: Optional[int] = None,
     rrf_k: Optional[int] = None,
     rrf_top_n: Optional[int] = None,
+    owner_id: str = "",
 ) -> List[Dict[str, Any]]:
     """RRF (Reciprocal Rank Fusion) 双路检索 + 重排序。
 
@@ -247,11 +248,12 @@ def rrf_rerank(
     from src.store import VectorStore
 
     embedder = get_embedder()
+    where = {"owner_id": owner_id} if owner_id else None
     if not embedder.is_dual:
         # 单路退化为普通检索
         store = VectorStore()
         q_emb = embedder.embed_query(query)
-        return store.query(q_emb, top_k=top_k or config.RAG_TOP_K)["hits"]
+        return store.query(q_emb, top_k=top_k or config.RAG_TOP_K, where=where)["hits"]
 
     k = top_k or config.RAG_TOP_K
     rrf_n = rrf_top_n or config.RRF_TOP_N
@@ -263,7 +265,7 @@ def rrf_rerank(
     for provider in embedder.providers:
         backend = embedder._backends[provider]
         q_emb = backend.embed([query])[0].tolist()
-        result = store.query(q_emb, top_k=rrf_n)
+        result = store.query(q_emb, top_k=rrf_n, where=where)
         rank_lists[provider] = result["hits"]
 
     # 2) RRF 融合

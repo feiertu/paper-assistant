@@ -134,6 +134,11 @@ RAG_COLLECTION_NAME: str = _env("RAG_COLLECTION_NAME", "knowledge") or "knowledg
 API_HOST: str = _env("API_HOST", "127.0.0.1") or "127.0.0.1"
 API_PORT: int = _env_int("API_PORT", 8000)
 
+# ---------- 多用户隔离 ----------
+
+SESSION_COOKIE: str = _env("SESSION_COOKIE", "paper_session") or "paper_session"
+SESSION_TTL_DAYS: int = _env_int("SESSION_TTL_DAYS", 30)
+
 # ---------- Streamlit UI ----------
 
 UI_TITLE: str = _env("UI_TITLE", "Paper Assistant") or "Paper Assistant"

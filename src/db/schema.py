@@ -40,6 +40,7 @@ class Paper:
     source: str = ""  # "arxiv" / "grobid" / "manual"
     ingest_status: str = "pending"  # "pending" | "ingested" | "failed"
     chunk_count: int = 0
+    owner_id: str = ""  # session_id 或 user_id
     id: Optional[int] = None  # 自增主键，由数据库分配
     created_at: str = ""
 
@@ -55,6 +56,7 @@ class Paper:
             "source": self.source,
             "ingest_status": self.ingest_status,
             "chunk_count": self.chunk_count,
+            "owner_id": self.owner_id,
             "created_at": self.created_at,
         }
 
@@ -71,6 +73,7 @@ class Paper:
             source=row["source"] or "",
             ingest_status=row["ingest_status"] or "pending",
             chunk_count=row["chunk_count"] or 0,
+            owner_id=row["owner_id"] if "owner_id" in row.keys() else "",
             created_at=row["created_at"] or "",
         )
 
@@ -83,6 +86,7 @@ class QueryRecord:
     answer_text: str = ""
     lang: str = "zh"
     hit_count: int = 0
+    owner_id: str = ""
     id: Optional[int] = None
     created_at: str = ""
 
@@ -94,6 +98,7 @@ class QueryRecord:
             answer_text=row["answer_text"] or "",
             lang=row["lang"] or "zh",
             hit_count=row["hit_count"] or 0,
+            owner_id=row["owner_id"] if "owner_id" in row.keys() else "",
             created_at=row["created_at"] or "",
         )
 
@@ -134,6 +139,7 @@ CREATE TABLE IF NOT EXISTS papers (
     source      TEXT    DEFAULT '',
     ingest_status TEXT  DEFAULT 'pending',
     chunk_count INTEGER DEFAULT 0,
+    owner_id    TEXT    DEFAULT '',
     created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -144,6 +150,7 @@ CREATE TABLE IF NOT EXISTS queries (
     answer_text TEXT    DEFAULT '',
     lang        TEXT    DEFAULT 'zh',
     hit_count   INTEGER DEFAULT 0,
+    owner_id    TEXT    DEFAULT '',
     created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -223,9 +230,12 @@ _initialized = False
 _init_lock = _threading.Lock()
 
 
+_MIGRATION_RUN = False
+
+
 def get_connection() -> sqlite3.Connection:
-    """获取数据库连接（线程安全自动初始化）。"""
-    global _initialized
+    """获取数据库连接（线程安全自动初始化 + 迁移）。"""
+    global _initialized, _MIGRATION_RUN
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -236,7 +246,32 @@ def get_connection() -> sqlite3.Connection:
             conn.executescript(DDL)
             conn.commit()
             _initialized = True
+        # 自动迁移：已存在的表加 owner_id 列
+        if not _MIGRATION_RUN:
+            _migrate(conn)
+            _MIGRATION_RUN = True
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """向后兼容：给旧表添加 owner_id 列 + 索引。"""
+    try:
+        conn.execute("ALTER TABLE papers ADD COLUMN owner_id TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+    try:
+        conn.execute("ALTER TABLE queries ADD COLUMN owner_id TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_papers_owner ON papers(owner_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_queries_owner ON queries(owner_id)"
+    )
+    conn.commit()
 
 
 def init_db() -> None:

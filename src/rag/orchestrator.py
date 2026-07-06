@@ -32,13 +32,14 @@ def _get_embedder():
 # ──────────────────────────────────────────────
 
 def ingest_parsed_dir(
-    parsed_dir: Optional[str] = None, reset: bool = False
+    parsed_dir: Optional[str] = None, reset: bool = False, owner_id: str = ""
 ) -> Dict[str, Any]:
     """将 parsed JSON 目录中的全部论文导入向量库。
 
     Args:
         parsed_dir: 解析后 JSON 目录，None 则自动探测。
         reset: 是否先清空 collection。
+        owner_id: 多用户隔离标识。
 
     Returns:
         {"status": "ok", "papers": N, "chunks": M} 或 {"error": "..."}
@@ -76,6 +77,7 @@ def ingest_parsed_dir(
                         "page": int(chunk.get("page") or 0),
                         "source": chunk.get("source") or arxiv_id,
                         "arxiv_id": arxiv_id,
+                        "owner_id": owner_id,
                     }
                 )
 
@@ -130,6 +132,7 @@ def ingest_parsed_dir(
                     source=meta.get("source") or "pymupdf",
                     ingest_status="ingested",
                     chunk_count=chunk_counts.get(arxiv_id, 0),
+                    owner_id=owner_id,
                 )
             )
 
@@ -201,9 +204,9 @@ def ingest_text(
 # ──────────────────────────────────────────────
 
 def retrieve(
-    query: str, top_k: Optional[int] = None
+    query: str, top_k: Optional[int] = None, owner_id: str = ""
 ) -> Dict[str, Any]:
-    """向量检索（单路或 RRF 双路）。
+    """向量检索（单路或 RRF 双路），按 owner_id 隔离。
 
     Args:
         query: 查询文本。
@@ -221,10 +224,11 @@ def retrieve(
             return {"hits": [], "query": query}
 
         if embedder.is_dual:
-            hits = rrf_rerank(query, top_k=k)
+            hits = rrf_rerank(query, top_k=k, owner_id=owner_id)
         else:
             q_vec = embedder.embed_query(query)
-            hits = store.query(q_vec, top_k=k)["hits"]
+            where = {"owner_id": owner_id} if owner_id else None
+            hits = store.query(q_vec, top_k=k, where=where)["hits"]
 
         return {"hits": hits, "query": query}
 
@@ -420,10 +424,10 @@ def get_store_stats() -> Dict[str, Any]:
     }
 
 
-def list_papers() -> List[Dict[str, str]]:
+def list_papers(owner_id: str = "") -> List[Dict[str, str]]:
     """列出已入库论文（优先查传统数据库，回退到向量库扫描）。"""
     paper_dao: PaperDAO = get_dao("paper")
-    db_papers = paper_dao.find_ingested()
+    db_papers = paper_dao.find_ingested(owner_id=owner_id)
     if db_papers:
         return [{"arxiv_id": p.arxiv_id, "title": p.title} for p in db_papers]
 

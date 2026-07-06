@@ -17,6 +17,7 @@ import json
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -55,6 +56,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 DEFAULTS = {
     "user": None,              # 当前登录用户
+    "owner_id": "",            # 会话标识（匿名 UUID 或登录后 user_id）
     "show_auth": False,        # 是否显示登录弹窗
     "auth_mode": "login",      # "login" | "register"
     "auth_error": "",          # 认证错误消息
@@ -62,6 +64,24 @@ DEFAULTS = {
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── Session 管理: 匿名用户生成 UUID，登录用户用 user_id ──
+if not st.session_state.owner_id:
+    st.session_state.owner_id = uuid.uuid4().hex
+# Cookie 持久化（跨页面刷新保留）
+st.components.v1.html(f"""
+<script>
+(function(){{
+    var name = '{config.SESSION_COOKIE}';
+    var val = '{st.session_state.owner_id}';
+    var days = {config.SESSION_TTL_DAYS};
+    var d = new Date();
+    d.setTime(d.getTime() + days*86400000);
+    document.cookie = name + '=' + val + ';path=/;expires=' + d.toUTCString();
+}})();
+</script>
+""", height=0)
         st.session_state[k] = v
 
 # ══════════════════════════════════════════════════════════════
@@ -632,16 +652,18 @@ elif page_key == "agent":
 
 elif page_key == "library":
     def render_library():
+        owner_id = st.session_state.owner_id
         st.markdown('<div class="page-title">论文库</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">浏览、搜索和管理已入库的学术论文。</p>',
                     unsafe_allow_html=True)
 
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
-            # 内部 API 鉴权
+            # 内部 API 鉴权 + 用户隔离
             _api_headers = {}
             if config.API_AUTH_ENABLED and config.API_AUTH_KEY:
                 _api_headers["X-API-Key"] = config.API_AUTH_KEY
+            _api_headers["X-Owner-Id"] = st.session_state.owner_id
 
             col_q1, col_q2, col_q3 = st.columns([3, 1, 1])
             with col_q1:
@@ -731,7 +753,7 @@ elif page_key == "library":
 
         # ── 处理待处理论文 ──
         dao = get_dao("paper")
-        pending_count = len([p for p in dao.find_all(limit=200) if p.ingest_status == "pending"])
+        pending_count = len([p for p in dao.find_all(limit=200, owner_id=owner_id) if p.ingest_status == "pending"])
         if pending_count > 0:
             st.warning(f"📋 {pending_count} 篇论文待处理（仅元数据，尚未解析入库）", icon="⚠️")
             if st.button("⚡ 一键处理", type="primary", key="process_pending_btn",
@@ -755,7 +777,7 @@ elif page_key == "library":
                     except Exception as e:
                         st.error(str(e))
 
-        total = dao.count()
+        total = dao.count(owner_id=owner_id)
 
         col1, col2, col3 = st.columns([3, 2, 1])
         with col1:
@@ -789,9 +811,10 @@ elif page_key == "library":
                 keyword=keyword, limit=limit, author=author,
                 year_from=year_from, year_to=year_to,
                 source=source, status=status_filter, sort_by=sort_by,
+                owner_id=owner_id,
             )
         else:
-            papers = dao.find_all(limit=limit)
+            papers = dao.find_all(limit=limit, owner_id=owner_id)
 
         st.caption(f"共 {len(papers)} 条结果（全库 {total} 篇）")
 

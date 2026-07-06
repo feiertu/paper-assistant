@@ -78,7 +78,7 @@ def parse_xml(xml_content):
     return papers
 
 
-def save_metadata_to_db(papers: List[Dict]) -> int:
+def save_metadata_to_db(papers: List[Dict], owner_id: str = "") -> int:
     """将 arXiv 元数据保存到 SQLite 数据库。"""
     from src.db import Paper, get_dao
 
@@ -96,6 +96,7 @@ def save_metadata_to_db(papers: List[Dict]) -> int:
                 source="arxiv",
                 ingest_status="pending",
                 chunk_count=0,
+                owner_id=owner_id,
             ))
             saved += 1
         except Exception as e:
@@ -103,11 +104,12 @@ def save_metadata_to_db(papers: List[Dict]) -> int:
     return saved
 
 
-def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
+def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None,
+                      owner_id: str = "") -> List[Dict]:
     """抓取 arXiv 元数据并保存到数据库。"""
     papers = fetch_arxiv_metadata(query=query, max_results=max_results)
     if papers:
-        saved = save_metadata_to_db(papers)
+        saved = save_metadata_to_db(papers, owner_id=owner_id)
         logger.info("已保存 %d/%d 条元数据到数据库", saved, len(papers))
     return papers
 

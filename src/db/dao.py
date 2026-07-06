@@ -5,8 +5,8 @@
   - 上层不关心底层用什么数据库（SQLite 可随时换 PostgreSQL）
   - 符合 DIP（依赖抽象而非具体）
 
-每个 DAO 对应一个实体表，提供:
-  - insert / update / delete / findById / findAll
+多用户隔离（§22）：
+  - 所有查询按 owner_id 过滤，空字符串 = 全局/未隔离
 """
 
 from __future__ import annotations
@@ -35,74 +35,84 @@ class PaperDAO:
                 "SELECT id FROM papers WHERE arxiv_id = ?", (paper.arxiv_id,)
             ).fetchone()
             if existing:
-                # 更新已有记录
                 conn.execute(
                     """UPDATE papers SET title=?, authors=?, abstract=?, published=?,
-                       pdf_url=?, source=?, ingest_status=?, chunk_count=?
+                       pdf_url=?, source=?, ingest_status=?, chunk_count=?, owner_id=?
                        WHERE arxiv_id=?""",
                     (
                         paper.title, paper.authors, paper.abstract, paper.published,
                         paper.pdf_url, paper.source, paper.ingest_status, paper.chunk_count,
-                        paper.arxiv_id,
+                        paper.owner_id, paper.arxiv_id,
                     ),
                 )
                 conn.commit()
                 return existing["id"]
             cur = conn.execute(
                 """INSERT INTO papers (arxiv_id, title, authors, abstract, published,
-                   pdf_url, source, ingest_status, chunk_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   pdf_url, source, ingest_status, chunk_count, owner_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     paper.arxiv_id, paper.title, paper.authors, paper.abstract,
                     paper.published, paper.pdf_url, paper.source,
-                    paper.ingest_status, paper.chunk_count,
+                    paper.ingest_status, paper.chunk_count, paper.owner_id,
                 ),
             )
             conn.commit()
             return cur.lastrowid
 
-    def find_by_id(self, paper_id: int) -> Optional[Paper]:
-        with get_connection() as conn:
-            row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
-            return Paper.from_row(row) if row else None
-
-    def find_by_arxiv_id(self, arxiv_id: str) -> Optional[Paper]:
+    def find_by_id(self, paper_id: int, owner_id: str = "") -> Optional[Paper]:
         with get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM papers WHERE arxiv_id = ?", (arxiv_id,)
+                "SELECT * FROM papers WHERE id = ? AND owner_id = ?",
+                (paper_id, owner_id),
             ).fetchone()
             return Paper.from_row(row) if row else None
 
-    def find_all(self, limit: int = 50, offset: int = 0) -> List[Paper]:
+    def find_by_arxiv_id(self, arxiv_id: str, owner_id: str = "") -> Optional[Paper]:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM papers WHERE arxiv_id = ? AND owner_id = ?",
+                (arxiv_id, owner_id),
+            ).fetchone()
+            return Paper.from_row(row) if row else None
+
+    def find_all(self, limit: int = 50, offset: int = 0, owner_id: str = "") -> List[Paper]:
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM papers ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                "SELECT * FROM papers WHERE owner_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (owner_id, limit, offset),
             ).fetchall()
             return [Paper.from_row(r) for r in rows]
 
-    def find_ingested(self) -> List[Paper]:
+    def find_ingested(self, owner_id: str = "") -> List[Paper]:
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM papers WHERE ingest_status = 'ingested' ORDER BY created_at DESC"
+                "SELECT * FROM papers WHERE ingest_status = 'ingested' AND owner_id = ? ORDER BY created_at DESC",
+                (owner_id,),
             ).fetchall()
             return [Paper.from_row(r) for r in rows]
 
-    def count(self) -> int:
+    def count(self, owner_id: str = "") -> int:
         with get_connection() as conn:
-            return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM papers WHERE owner_id = ?", (owner_id,)
+            ).fetchone()[0]
 
-    def update_status(self, arxiv_id: str, status: str, chunk_count: int = 0) -> None:
+    def update_status(self, arxiv_id: str, status: str, chunk_count: int = 0,
+                      owner_id: str = "") -> None:
         with get_connection() as conn:
             conn.execute(
-                "UPDATE papers SET ingest_status=?, chunk_count=? WHERE arxiv_id=?",
-                (status, chunk_count, arxiv_id),
+                "UPDATE papers SET ingest_status=?, chunk_count=? WHERE arxiv_id=? AND owner_id=?",
+                (status, chunk_count, arxiv_id, owner_id),
             )
             conn.commit()
 
-    def delete(self, arxiv_id: str) -> bool:
+    def delete(self, arxiv_id: str, owner_id: str = "") -> bool:
         with get_connection() as conn:
-            cur = conn.execute("DELETE FROM papers WHERE arxiv_id = ?", (arxiv_id,))
+            cur = conn.execute(
+                "DELETE FROM papers WHERE arxiv_id = ? AND owner_id = ?",
+                (arxiv_id, owner_id),
+            )
             conn.commit()
             return cur.rowcount > 0
 
@@ -117,36 +127,40 @@ class QueryDAO:
     def insert(self, record: QueryRecord) -> int:
         with get_connection() as conn:
             cur = conn.execute(
-                """INSERT INTO queries (query_text, answer_text, lang, hit_count)
-                   VALUES (?, ?, ?, ?)""",
-                (record.query_text, record.answer_text, record.lang, record.hit_count),
+                """INSERT INTO queries (query_text, answer_text, lang, hit_count, owner_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (record.query_text, record.answer_text, record.lang,
+                 record.hit_count, record.owner_id),
             )
             conn.commit()
             return cur.lastrowid
 
-    def find_recent(self, limit: int = 20) -> List[QueryRecord]:
+    def find_recent(self, limit: int = 20, owner_id: str = "") -> List[QueryRecord]:
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM queries ORDER BY created_at DESC LIMIT ?", (limit,)
+                "SELECT * FROM queries WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                (owner_id, limit),
             ).fetchall()
             return [QueryRecord.from_row(r) for r in rows]
 
-    def search(self, keyword: str, limit: int = 20) -> List[QueryRecord]:
+    def search(self, keyword: str, limit: int = 20, owner_id: str = "") -> List[QueryRecord]:
         with get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM queries WHERE query_text LIKE ? ORDER BY created_at DESC LIMIT ?",
-                (f"%{keyword}%", limit),
+                "SELECT * FROM queries WHERE query_text LIKE ? AND owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                (f"%{keyword}%", owner_id, limit),
             ).fetchall()
             return [QueryRecord.from_row(r) for r in rows]
 
-    def clear(self) -> None:
+    def clear(self, owner_id: str = "") -> None:
         with get_connection() as conn:
-            conn.execute("DELETE FROM queries")
+            conn.execute("DELETE FROM queries WHERE owner_id = ?", (owner_id,))
             conn.commit()
 
-    def count(self) -> int:
+    def count(self, owner_id: str = "") -> int:
         with get_connection() as conn:
-            return conn.execute("SELECT COUNT(*) FROM queries").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM queries WHERE owner_id = ?", (owner_id,)
+            ).fetchone()[0]
 
     # ── N:M 关系操作（§19.3：中间表） ──
 
@@ -250,7 +264,7 @@ def get_dao(name: str):
 
     用法：
         paper_dao = get_dao("paper")
-        papers = paper_dao.find_all()
+        papers = paper_dao.find_all(owner_id="session_xxx")
     """
     global _daos
     if _daos is None:
@@ -373,21 +387,11 @@ def _extend_paper_dao():
                arxiv_id: str = "", author: str = "",
                year_from: str = "", year_to: str = "",
                source: str = "", status: str = "",
-               sort_by: str = "created_at") -> List:
-        """全文搜索 + 多条件过滤。
-
-        Args:
-            keyword: FTS5 搜索关键词
-            limit: 最大返回数
-            arxiv_id: arXiv ID 模糊匹配
-            author: 作者名模糊匹配
-            year_from / year_to: 年份范围
-            source: 来源过滤 (arxiv / grobid / pymupdf / manual)
-            status: 状态过滤 (pending / ingested / failed)
-            sort_by: 排序字段 (created_at / title / published)
-        """
-        conditions = []
-        params: list = []
+               sort_by: str = "created_at",
+               owner_id: str = "") -> List:
+        """全文搜索 + 多条件过滤（按 owner 隔离）。"""
+        conditions = ["p.owner_id = ?"]
+        params: list = [owner_id]
 
         if keyword and keyword.strip():
             conditions.append("p.id IN (SELECT rowid FROM papers_fts WHERE papers_fts MATCH ?)")
@@ -417,7 +421,7 @@ def _extend_paper_dao():
             conditions.append("p.ingest_status = ?")
             params.append(status)
 
-        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        where = "WHERE " + " AND ".join(conditions)
 
         allowed_sort = {"created_at": "p.created_at DESC", "title": "p.title ASC",
                         "published": "p.published DESC"}
