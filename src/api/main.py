@@ -53,6 +53,17 @@ def _validate_config_on_startup() -> None:
         errors.append("EMBEDDING_PROVIDER 包含 voyage 但 VOYAGE_API_KEY 未设置")
     if not config.ARXIV_QUERY:
         errors.append("ARXIV_QUERY 为空")
+
+    # 检测已知不兼容组合：DeepSeek 不支持 embedding
+    if "openai" in config.EMBEDDING_PROVIDER:
+        base = (config.EMBEDDING_BASE_URL or config.OPENAI_BASE_URL or "").lower()
+        if "deepseek" in base and not config.EMBEDDING_BASE_URL:
+            errors.append(
+                "OPENAI_BASE_URL 指向 DeepSeek，但 DeepSeek 不提供 embedding API！\n"
+                "  请在 .env 中设置 EMBEDDING_BASE_URL 指向支持 embedding 的服务，\n"
+                "  或设置 EMBEDDING_PROVIDER=voyage 并配置 VOYAGE_API_KEY"
+            )
+
     if errors:
         msg = "启动配置校验失败:\n  - " + "\n  - ".join(errors)
         logger.error(msg)
@@ -478,12 +489,14 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
                 logger.error("解析失败 %s: %s", p['id'], e)
     steps.append({"step": "parse", "count": parsed_cnt})
 
-    # 4. 入库
-    if req.auto_ingest and parsed_cnt > 0:
+    # 4. 入库 — 只要有论文待处理就执行（已存在 JSON 不会浪费资源）
+    if req.auto_ingest:
         result = ingest_parsed_dir(owner_id=owner_id)
-        ingest_count = result.get("papers", 0)
-        steps.append({"step": "ingest", "papers": ingest_count,
-                      "chunks": result.get("chunks", 0)})
+        if "error" in result:
+            steps.append({"step": "ingest", "error": result["error"]})
+        else:
+            steps.append({"step": "ingest", "papers": result.get("papers", 0),
+                          "chunks": result.get("chunks", 0)})
 
     return {"status": "ok", "steps": steps}
 
@@ -530,12 +543,16 @@ def arxiv_process_pending(request: Request):
             except Exception as e:
                 logger.error("解析失败 %s: %s", paper.arxiv_id, e)
 
-    # 3. 入库
+    # 3. 入库 — 只要有待处理论文就执行入库（不依赖 parsed_cnt）
     ingest_result = {"papers": 0, "chunks": 0}
-    if parsed_cnt > 0:
+    ingest_error = ""
+    if pending:
         result = ingest_parsed_dir(owner_id=owner_id)
         if "error" not in result:
             ingest_result = result
+        else:
+            ingest_error = result["error"]
+            logger.error("入库失败: %s", ingest_error)
 
     return {
         "status": "ok",
@@ -545,6 +562,7 @@ def arxiv_process_pending(request: Request):
         "parsed": parsed_cnt,
         "ingested": ingest_result.get("papers", 0),
         "chunks": ingest_result.get("chunks", 0),
+        "ingest_error": ingest_error,
     }
 
 

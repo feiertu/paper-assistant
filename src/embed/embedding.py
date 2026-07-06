@@ -41,17 +41,51 @@ class _OpenAIBackend:
         )
         self._model = model_name
 
+        # 检测非标准 API：MiniMax 等使用 texts/vectors 而非 input/data 格式
+        self._base_url = base_url
+        self._is_minimax = "minimax" in (base_url or "").lower()
+
     @property
     def name(self) -> str:
         return "openai"
 
     def embed(self, texts: List[str]) -> np.ndarray:
+        if self._is_minimax:
+            return self._embed_minimax(texts)
+        return self._embed_openai(texts)
+
+    def _embed_openai(self, texts: List[str]) -> np.ndarray:
         resp = self._client.embeddings.create(
             model=self._model,
             input=texts,
             dimensions=config.EMBEDDING_DIM,
         )
         arr = np.asarray([d.embedding for d in resp.data], dtype=np.float32)
+        return self._normalize(arr)
+
+    def _embed_minimax(self, texts: List[str]) -> np.ndarray:
+        """MiniMax API: 使用 texts 字段（非 input），返回 vectors（非 data[].embedding）。"""
+        import requests
+
+        key = config.EMBEDDING_API_KEY or config.OPENAI_API_KEY
+        url = f"{self._base_url.rstrip('/')}/embeddings"
+        resp = requests.post(
+            url,
+            json={"model": self._model, "texts": texts},
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"MiniMax embedding API 返回 {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        vectors = data.get("vectors")
+        if not vectors:
+            err = data.get("base_resp", {})
+            raise RuntimeError(
+                f"MiniMax embedding 返回空向量: code={err.get('status_code')} "
+                f"msg={err.get('status_msg')}"
+            )
+        arr = np.asarray(vectors, dtype=np.float32)
         return self._normalize(arr)
 
     @staticmethod
@@ -90,6 +124,35 @@ class _VoyageBackend:
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         return arr / norms
+
+
+class _LocalBackend:
+    """本地 sentence-transformers embedding 后端。
+
+    不依赖外部 API，适合离线环境或 API 不提供 embedding 的情况。
+    默认模型：all-MiniLM-L6-v2（英文，384维，80MB）或 BAAI/bge-small-zh-v1.5（中英，512维，100MB）。
+    """
+
+    def __init__(self, model_name: str) -> None:
+        from sentence_transformers import SentenceTransformer
+
+        self._model_name = model_name
+        logger.info("加载本地 embedding 模型: %s ...", model_name)
+        self._model = SentenceTransformer(model_name)
+        logger.info("本地 embedding 模型加载完成: %s dim=%d", model_name, self.dim)
+
+    @property
+    def name(self) -> str:
+        return "local"
+
+    @property
+    def dim(self) -> int:
+        return self._model.get_sentence_embedding_dimension()
+
+    def embed(self, texts: List[str]) -> np.ndarray:
+        arr = np.asarray(self._model.encode(texts, normalize_embeddings=True), dtype=np.float32)
+        # ChromaDB 需要 float64 或普通 Python list，这里统一转 Python float
+        return arr.astype(np.float64)
 
 
 # ---------- 统一入口 ----------
@@ -131,8 +194,10 @@ class Embedder:
             return _OpenAIBackend(self._model_name)
         if provider == "voyage":
             return _VoyageBackend(self._model_name)
+        if provider == "local":
+            return _LocalBackend(self._model_name)
         raise ValueError(
-            f"未知 EMBEDDING_PROVIDER={provider!r}，可选: openai / voyage"
+            f"未知 EMBEDDING_PROVIDER={provider!r}，可选: openai / voyage / local"
         )
 
     # ---------- 单后端接口 ----------

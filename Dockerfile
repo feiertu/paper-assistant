@@ -19,10 +19,13 @@ RUN pip install --no-cache-dir -r requirements.lock
 # 项目代码
 COPY --chown=paper:paper . .
 
-# 数据目录（挂载点）
+# 数据目录（挂载点）+ HuggingFace 缓存
 RUN mkdir -p /app/data/parsed /app/data/chroma_db /app/data/raw \
     /app/data/processed /app/logs /app/data/chroma_backup \
-    && chown -R paper:paper /app/data /app/logs
+    /app/.cache/huggingface \
+    && chown -R paper:paper /app/data /app/logs /app/.cache
+
+ENV HF_HOME=/app/.cache/huggingface
 
 EXPOSE 8000 8501
 

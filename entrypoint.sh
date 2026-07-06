@@ -2,7 +2,10 @@
 set -e
 
 # ── 修复 volume 权限（volume 在运行时挂载，构建时 chown 无效） ──
-chown -R paper:paper /app/data /app/logs 2>/dev/null || true
+chown -R paper:paper /app/data /app/logs /app/.cache 2>/dev/null || true
+
+# HuggingFace 缓存目录（sentence-transformers 本地模型）
+export HF_HOME=/app/.cache/huggingface
 
 # 进程管理：trap 确保退出时清理所有子进程
 cleanup() {

@@ -116,6 +116,27 @@ class PaperDAO:
             conn.commit()
             return cur.rowcount > 0
 
+    def get_existing_ids(self, owner_id: str = "") -> set:
+        """返回所有已入库的 arxiv_id（ingest_status='ingested'）。
+
+        用于 arXiv 搜索去重：已有且已入库的论文不再重复搜索/下载。
+        """
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT arxiv_id FROM papers WHERE ingest_status = 'ingested' AND owner_id = ?",
+                (owner_id,),
+            ).fetchall()
+            return {r["arxiv_id"] for r in rows}
+
+    def get_all_ids(self, owner_id: str = "") -> set:
+        """返回所有已知 arxiv_id（含 pending/failed/ingested），用于去重。"""
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT arxiv_id FROM papers WHERE owner_id = ?",
+                (owner_id,),
+            ).fetchall()
+            return {r["arxiv_id"] for r in rows}
+
 
 # ══════════════════════════════════════════════
 #  QueryDAO — 查询历史访问

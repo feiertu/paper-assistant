@@ -72,8 +72,9 @@ CHUNK_OVERLAP: int = _env_int("CHUNK_OVERLAP", 200)
 
 # ---------- Embedding ----------
 
-# provider: 逗号分隔，可选 "openai" / "voyage"，例如 "openai,voyage" 开启 RRF 双路检索
+# provider: 逗号分隔，可选 "openai" / "voyage" / "local"，例如 "openai,voyage" 开启 RRF 双路检索
 EMBEDDING_PROVIDER: str = _env("EMBEDDING_PROVIDER", "openai,voyage") or "openai,voyage"
+# 模型名（local 模式下填写如 BAAI/bge-m3、all-MiniLM-L6-v2 等）
 EMBEDDING_MODEL: str = _env("EMBEDDING_MODEL", "text-embedding-3-large") or "text-embedding-3-large"
 EMBEDDING_DIM: int = _env_int("EMBEDDING_DIM", 1024)
 EMBEDDING_BATCH_SIZE: int = _env_int("EMBEDDING_BATCH_SIZE", 32)

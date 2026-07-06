@@ -114,12 +114,29 @@ def save_metadata_to_db(papers: List[Dict], owner_id: str = "") -> int:
 
 def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None,
                       owner_id: str = "") -> List[Dict]:
-    """抓取 arXiv 元数据并保存到数据库。"""
+    """抓取 arXiv 元数据并保存到数据库。已入库的论文自动跳过不重复抓取。"""
+    from src.db import get_dao
+
+    paper_dao = get_dao("paper")
+
     papers = fetch_arxiv_metadata(query=query, max_results=max_results)
-    if papers:
-        saved = save_metadata_to_db(papers, owner_id=owner_id)
-        logger.info("已保存 %d/%d 条元数据到数据库", saved, len(papers))
-    return papers
+
+    # 过滤已入库论文 — 待处理/失败的仍允许重试
+    ingested_ids = paper_dao.get_existing_ids(owner_id=owner_id)
+    new_papers = [p for p in papers if p["id"] not in ingested_ids]
+    skipped = len(papers) - len(new_papers)
+
+    if new_papers:
+        saved = save_metadata_to_db(new_papers, owner_id=owner_id)
+        if skipped > 0:
+            logger.info("已保存 %d/%d 条元数据，跳过 %d 篇已入库论文",
+                        saved, len(new_papers), skipped)
+        else:
+            logger.info("已保存 %d/%d 条元数据到数据库", saved, len(papers))
+    elif papers and skipped == len(papers):
+        logger.info("全部 %d 篇论文已入库，跳过", skipped)
+
+    return new_papers if new_papers else papers
 
 
 if __name__ == "__main__":

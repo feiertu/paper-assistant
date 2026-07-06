@@ -80,7 +80,7 @@ class VectorStore:
         kwargs = dict(
             ids=list(ids),
             documents=list(documents),
-            embeddings=[list(e) for e in embeddings],
+            embeddings=[e.tolist() if hasattr(e, 'tolist') else list(e) for e in embeddings],
         )
         if metadatas is not None:
             if len(metadatas) != len(ids):
