@@ -2,10 +2,13 @@
 
 基于 LangChain RecursiveCharacterTextSplitter，按段落边界优先切分，
 对学术论文正文比纯字符切割更友好。
+
+v2: 增加代码块 / LaTeX 公式检测，保护特殊内容不被切断。
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -15,6 +18,48 @@ import config
 
 # 学术论文友好的分隔符优先级：段落 > 换行 > 句号空格 > 空格 > 硬切
 _ACADEMIC_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+
+# 代码块和 LaTeX 公式的保护模式
+_CODE_BLOCK_RE = re.compile(r'```[^`]*```', re.DOTALL)
+_INLINE_CODE_RE = re.compile(r'`[^`]+`')
+_LATEX_BLOCK_RE = re.compile(r'\$\$[^$]*\$\$', re.DOTALL)
+_LATEX_INLINE_RE = re.compile(r'\$[^$]+\$')
+
+
+def _protect_special_blocks(text: str) -> tuple:
+    """将代码块和 LaTeX 公式替换为占位符，避免被切断。
+
+    Returns:
+        (protected_text, placeholder_map) — placeholder_map 是 {placeholder: original} 字典
+    """
+    placeholders: Dict[str, str] = {}
+    counter = [0]
+
+    def _replace(match, prefix):
+        counter[0] += 1
+        ph = f"__{prefix}_{counter[0]}__"
+        placeholders[ph] = match.group(0)
+        return ph
+
+    # 按长度优先级：先保护长块（多行代码/公式），再保护短块
+    text = _CODE_BLOCK_RE.sub(lambda m: _replace(m, 'CB'), text)
+    text = _LATEX_BLOCK_RE.sub(lambda m: _replace(m, 'LB'), text)
+    text = _INLINE_CODE_RE.sub(lambda m: _replace(m, 'IC'), text)
+    text = _LATEX_INLINE_RE.sub(lambda m: _replace(m, 'LI'), text)
+
+    return text, placeholders
+
+
+def _restore_special_blocks(chunks: List[str], placeholder_map: Dict[str, str]) -> List[str]:
+    """将分块后的占位符还原为原始内容。"""
+    if not placeholder_map:
+        return chunks
+    result = []
+    for chunk in chunks:
+        for ph, original in placeholder_map.items():
+            chunk = chunk.replace(ph, original)
+        result.append(chunk)
+    return result
 
 
 def _get_splitter(
@@ -27,7 +72,7 @@ def _get_splitter(
         chunk_size=cs,
         chunk_overlap=co,
         separators=_ACADEMIC_SEPARATORS,
-        keep_separator=True,  # 保留分隔符，不丢段落信息
+        keep_separator=True,
         strip_whitespace=True,
     )
 
@@ -37,18 +82,17 @@ def split_text(
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
 ) -> List[str]:
-    """对纯文本分块。
-
-    空字符串返回 []；自动用 config 中的默认值。
-    """
+    """对纯文本分块，自动保护代码块和公式不被切断。"""
     if not text or not text.strip():
         return []
     splitter = _get_splitter(chunk_size, chunk_overlap)
-    return splitter.split_text(text.strip())
+    protected, ph_map = _protect_special_blocks(text.strip())
+    raw_chunks = splitter.split_text(protected)
+    return _restore_special_blocks(raw_chunks, ph_map)
 
 
 def split_doc(doc: Dict, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> List[Dict]:
-    """对 `parse/pdf.py` 输出的结构化 doc 分块。
+    """对 `parse/pdf.py` 输出的结构化 doc 分块，保护代码块和公式。
 
     期望 doc 结构：{"metadata": {...}, "sections": [{"title", "page", "content", "subsections"?}]}
     返回的每个 chunk dict: {"text", "title", "page", "section_title", "source"}
@@ -61,10 +105,14 @@ def split_doc(doc: Dict, chunk_size: Optional[int] = None, chunk_overlap: Option
     meta = doc.get("metadata") or {}
 
     def _emit(text: str, title: str, page, section_title: str) -> None:
-        for piece in splitter.split_text(text.strip()):
+        protected, ph_map = _protect_special_blocks(text.strip())
+        for piece in splitter.split_text(protected):
+            restored = piece
+            for ph, original in ph_map.items():
+                restored = restored.replace(ph, original)
             chunks.append(
                 {
-                    "text": piece,
+                    "text": restored,
                     "title": title,
                     "page": page,
                     "section_title": section_title,

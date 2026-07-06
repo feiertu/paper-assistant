@@ -257,6 +257,7 @@ def run_agent_stream(
     lang: str = "zh",
     max_iterations: Optional[int] = None,
     enabled_tools: Optional[List[str]] = None,
+    temperature: Optional[float] = None,
 ) -> Generator[AgentEvent, None, None]:
     """快速启动 Agent 流式推理。
 
@@ -266,12 +267,14 @@ def run_agent_stream(
         lang: "zh" 或 "en"
         max_iterations: 最大推理步数
         enabled_tools: 启用的工具名列表（None = 全部）
+        temperature: LLM 温度（None 用 config.AGENT_TEMPERATURE）
 
     Yields:
         AgentEvent
     """
     agent = OpenAIFunctionsAgent(
         model=model,
+        temperature=temperature,
         max_iterations=max_iterations,
         enabled_tools=enabled_tools,
     )

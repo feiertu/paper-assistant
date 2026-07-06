@@ -288,6 +288,7 @@ def answer_rag_stream(
     query: str,
     top_k: Optional[int] = None,
     lang: str = "zh",
+    temperature: Optional[float] = None,
 ) -> Generator[str, None, None]:
     """RAG 问答（流式），检索结果缓存用于历史记录。"""
     from src.llm import get_llm
@@ -305,7 +306,7 @@ def answer_rag_stream(
 
     llm = get_llm()
     full_answer = ""
-    for token in llm.complete_with_context_stream(query, hits, lang=lang):
+    for token in llm.complete_with_context_stream(query, hits, lang=lang, temperature=temperature):
         full_answer += token
         yield token
 

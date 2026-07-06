@@ -116,6 +116,7 @@ class LLMClient:
         hits: List[Dict[str, Any]],
         lang: str = "zh",
         max_words: int = 600,
+        temperature: Optional[float] = None,
     ) -> str:
         """RAG 场景的一站式问答：拼 prompt → 调 LLM → 返回答案文本。
 
@@ -126,8 +127,8 @@ class LLMClient:
         context = prompts.format_context(hits)
         ctx_hash = make_context_hash([h.get("document", "") for h in hits])
 
-        # ── 尝试缓存命中 ──
-        if self._cache:
+        # ── 尝试缓存命中（仅默认温度下使用缓存） ──
+        if self._cache and temperature is None:
             cache_key = make_llm_key(query, ctx_hash, lang, "qa")
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -140,9 +141,9 @@ class LLMClient:
             {"role": "system", "content": prompts.RAG_QA_SYSTEM},
             {"role": "user", "content": user_prompt},
         ]
-        logger.info("LLM 调用 (QA): model=%s query=%.60s hits=%d",
-                     self._qa_model, query, len(hits))
-        result = self.chat(messages, model=self._qa_model)
+        logger.info("LLM 调用 (QA): model=%s query=%.60s hits=%d temp=%s",
+                     self._qa_model, query, len(hits), temperature or "default")
+        result = self.chat(messages, model=self._qa_model, temperature=temperature)
 
         # ── 写入缓存 ──
         if self._cache:
@@ -155,6 +156,7 @@ class LLMClient:
         query: str,
         hits: List[Dict[str, Any]],
         lang: str = "zh",
+        temperature: Optional[float] = None,
     ) -> Generator[str, None, None]:
         """RAG 场景的流式问答（不走缓存，因为流式无法缓存）。"""
         from . import prompts
@@ -166,9 +168,9 @@ class LLMClient:
             {"role": "system", "content": prompts.RAG_QA_SYSTEM},
             {"role": "user", "content": user_prompt},
         ]
-        logger.info("LLM 流式调用 (QA): model=%s query=%.60s hits=%d",
-                     self._qa_model, query, len(hits))
-        yield from self.chat_stream(messages, model=self._qa_model)
+        logger.info("LLM 流式调用 (QA): model=%s query=%.60s hits=%d temp=%s",
+                     self._qa_model, query, len(hits), temperature or "default")
+        yield from self.chat_stream(messages, model=self._qa_model, temperature=temperature)
 
     def summarize(self, text: str, lang: str = "zh", max_words: int = 200) -> str:
         """单文档摘要（带缓存）。"""

@@ -369,7 +369,7 @@ def render_auth_dialog():
 
 NAV_ITEMS = [
     ("qa",        "智能问答"),
-    ("agent",     "Agent 分析"),
+    ("agent",     "智能分析"),
     ("library",   "论文库"),
     ("summary",   "摘要 & 综述"),
     ("citations", "引用关系"),
@@ -447,6 +447,11 @@ def render_paper_card(p, show_abstract=True):
         "failed":   ('badge badge-muted', '失败'),
     }.get(p.ingest_status, ('badge badge-muted', p.ingest_status))
 
+    # 解析 arXiv 分类
+    cat_label = ""
+    if p.source and p.source.startswith("arxiv:"):
+        cat_label = p.source.split(":", 1)[1]
+
     html = f"""
     <div class="paper-card">
         <div class="title">{p.title or p.arxiv_id}</div>
@@ -454,6 +459,7 @@ def render_paper_card(p, show_abstract=True):
         <div class="meta">
             <span>{p.published or '未知'}</span>
             <span>{p.arxiv_id}</span>
+            {f'<span class="badge badge-info">{cat_label}</span>' if cat_label else ''}
             <span>{p.chunk_count} chunks</span>
             <span class="{status_badge[0]}">{status_badge[1]}</span>
         </div>
@@ -511,7 +517,7 @@ if page_key == "qa":
             top_k = st.selectbox("精度", [3, 5, 10, 20], index=1,
                                  label_visibility="collapsed", key="qa_topk")
 
-        col_btn, col_lang = st.columns([1, 4])
+        col_btn, col_lang, col_temp = st.columns([1, 2, 1])
         with col_btn:
             ask = st.button("搜索回答", type="primary", use_container_width=True,
                            disabled=not query.strip())
@@ -519,6 +525,10 @@ if page_key == "qa":
             lang_qa = st.selectbox("语言", ["zh", "en"],
                                    format_func=lambda x: "中文" if x == "zh" else "English",
                                    label_visibility="collapsed")
+        with col_temp:
+            qa_temperature = st.slider("温度", 0.0, 1.5, 0.3, 0.1,
+                                       label_visibility="collapsed", key="qa_temp",
+                                       help="越低越严谨，越高越有创造性")
 
         if ask:
             with st.status("检索相关知识…", expanded=False) as status:
@@ -534,7 +544,7 @@ if page_key == "qa":
             st.markdown("### 回答")
             answer_box = st.empty()
             full = ""
-            for token in answer_rag_stream(query, top_k=top_k, lang=lang_qa):
+            for token in answer_rag_stream(query, top_k=top_k, lang=lang_qa, temperature=qa_temperature):
                 full += token
                 answer_box.markdown(f"""
                 <div class="chat-container">
@@ -569,15 +579,15 @@ if page_key == "qa":
 
 elif page_key == "agent":
     def render_agent():
-        st.markdown('<div class="page-title">Agent 智能分析</div>', unsafe_allow_html=True)
-        st.markdown('<p class="page-description">Agent 可自主调用搜索、摘要、对比、引用分析等工具，处理复杂研究问题。</p>',
+        st.markdown('<div class="page-title">智能分析</div>', unsafe_allow_html=True)
+        st.markdown('<p class="page-description">AI Agent 自主调用搜索、摘要、对比、引用等工具，多步推理处理复杂研究问题。</p>',
                     unsafe_allow_html=True)
 
         col_q2, col_s2 = st.columns([4, 1])
         with col_q2:
             agent_query = st.text_area(
                 "描述你的研究问题…",
-                placeholder="例如：找出 VLM 在机器人操作中的最新论文，总结技术路线并推荐研究",
+                placeholder="例如：找出 VLM 在机器人操作中的最新论文，总结技术路线并推荐研究方向",
                 label_visibility="collapsed", height=80, key="agent_query",
             )
         with col_s2:
@@ -585,6 +595,9 @@ elif page_key == "agent":
                                       format_func=lambda x: "中文" if x == "zh" else "English",
                                       key="agent_lang")
             agent_iter = st.slider("步数", 1, 20, 10, key="agent_iter")
+            agent_temp = st.slider("温度", 0.0, 1.5, 0.1, 0.1,
+                                   label_visibility="visible", key="agent_temp",
+                                   help="越低越严谨，越高越有创造性")
 
         if st.button("开始推理", type="primary", disabled=not agent_query.strip()):
             from src.agent.openai_agent import run_agent_stream
@@ -599,7 +612,7 @@ elif page_key == "agent":
                             '分析中…</div>', unsafe_allow_html=True)
 
             try:
-                for event in run_agent_stream(query=agent_query, lang=agent_lang, max_iterations=agent_iter):
+                for event in run_agent_stream(query=agent_query, lang=agent_lang, max_iterations=agent_iter, temperature=agent_temp):
                     if event.type == "thinking":
                         with steps_container:
                             st.caption(f"{event.content}")
@@ -643,10 +656,23 @@ elif page_key == "library":
     def render_library():
         owner_id = st.session_state.owner_id
         st.markdown('<div class="page-title">论文库</div>', unsafe_allow_html=True)
-        st.markdown('<p class="page-description">浏览、搜索和管理已入库的学术论文。</p>',
+        st.markdown('<p class="page-description">浏览、搜索和管理已入库的学术论文。论文需经过"抓取 → 下载 → 解析 → 入库"四步才能用于问答。</p>',
                     unsafe_allow_html=True)
 
         dao = get_dao("paper")
+
+        # ── 快速操作栏 ──
+        col_imp, _ = st.columns([1, 4])
+        with col_imp:
+            if st.button("导入本地论文", type="secondary", use_container_width=True,
+                        help="扫描 parsed/ 目录下的 JSON 文件并向量化入库"):
+                with st.spinner("导入中..."):
+                    result = ingest_parsed_dir(owner_id=owner_id)
+                    if "error" in result:
+                        st.error(result["error"])
+                    else:
+                        st.success(f"已导入 {result.get('papers', 0)} 篇，{result.get('chunks', 0)} 个片段")
+                        st.rerun()
 
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
@@ -1169,172 +1195,130 @@ elif page_key == "system":
 elif page_key == "help":
     def render_help():
         st.markdown('<div class="page-title">帮助</div>', unsafe_allow_html=True)
-        st.markdown('<p class="page-description">各功能模块的使用说明与常见问题。</p>',
-                    unsafe_allow_html=True)
 
-        with st.expander("智能问答", expanded=True):
+        with st.expander("论文是怎么从 arXiv 到你眼前的？", expanded=True):
             st.markdown("""
-            **RAG 检索增强问答**，基于已入库论文的内容回答问题。
+            每篇论文要经过 **4 个步骤** 才能用来提问：
 
-            **使用方法：**
-            1. 在输入框中用自然语言提问，中英文均可
-            2. 调整精度滑块选择检索片段数（3/5/10/20），数值越大覆盖越广但响应越慢
-            3. 选择回答语言
-            4. 点击「搜索回答」
+            | 步骤 | 做什么 | 成功标志 |
+            |------|--------|----------|
+            | 1. 搜索 | 从 arXiv 找到论文标题、作者、摘要 | 论文出现在列表中 |
+            | 2. 下载 | 下载 PDF 到 `data/raw/` | 文件存在 |
+            | 3. 解析 | 把 PDF 转成结构化的 JSON | 生成 `data/parsed/*.json` |
+            | 4. 入库 | 切成小片段，转成向量，存进 ChromaDB | chunk 数 > 0 |
 
-            **适用场景：**
-            - 询问某篇论文的核心方法、实验结论
-            - 跨论文对比某个技术点的不同方案
-            - 查找某个概念在论文中的具体描述
+            **如果显示 "0块"**，说明论文卡在第 2、3 或 4 步。原因可能是：
+            - PDF 下载失败（网络问题、arXiv 限流）
+            - PDF 格式异常（扫描版、加密、非标准排版）
+            - 解析后 JSON 为空
 
-            **前提条件：** 论文需要先入库（通过「论文库」抓取或「数据管理」入库）。
+            **解决办法：** 点击「论文库」页面下方的 **"处理"** 按钮，系统会自动重试下载→解析→入库。
+            如果多次失败，可能是那篇论文的 PDF 确实有问题，跳过即可。
             """)
 
-        with st.expander("Agent 分析"):
+        with st.expander("arXiv 搜索语法说明"):
             st.markdown("""
-            **LLM 自主多步推理**，Agent 可自行选择调用搜索、摘要、引用分析等工具来完成复杂任务。
+            在「论文库」的抓取框里可以用这些语法精确搜索：
 
-            **使用方法：**
-            1. 用自然语言描述任务，越具体越好
-            2. 示例：「对比 2301.12345 和 2301.67890 两篇论文的方法差异」
-            3. 示例：「围绕 contrastive learning 生成一篇综述」
-            4. Agent 会自动选择工具、分步执行、汇总结果
+            | 语法 | 含义 | 例 |
+            |------|------|-----|
+            | `cat:cs.AI` | 限定分类 | `cat:cs.CL` 只搜计算语言学 |
+            | `ti:关键词` | 搜标题 | `ti:transformer` 标题含 transformer |
+            | `au:作者` | 搜作者 | `au:bengio` Yoshua Bengio 的论文 |
+            | `abs:关键词` | 搜摘要 | `abs:reinforcement learning` |
+            | `AND` / `OR` | 组合条件 | `cat:cs.AI AND ti:robot` |
 
-            **可用工具：**
-            - search — 全文/语义/列表搜索
-            - get_paper — 获取论文完整元数据
-            - summarize_paper — 生成单篇结构化摘要（问题/方法/结论）
-            - get_citations — 查看引用关系
-            - compare_papers — 两篇论文四段式对比
-            - recommend_similar — 向量相似度推荐
-            - generate_survey — 多论文综述或数据导出
+            **常用 arXiv 分类：**
+            - `cs.AI` — 人工智能
+            - `cs.CL` — 计算语言学 / NLP
+            - `cs.CV` — 计算机视觉
+            - `cs.LG` — 机器学习
+            - `cs.RO` — 机器人学
+            - `stat.ML` — 统计机器学习
             """)
 
-        with st.expander("论文库"):
+        with st.expander("论文语言问题的说明"):
             st.markdown("""
-            **论文管理中枢**，浏览、搜索、导入论文。
+            **抓到的论文是原文，没有翻译过。** 大部分 arXiv 论文是英文。
 
-            **arXiv 抓取（展开折叠区）：**
-            1. 输入 arXiv 查询语法，如 `cat:cs.CL`（分类）或 `ti:transformer`（标题关键词）
-            2. 设置抓取篇数（1-50）
-            3. 点击「一键抓取」，自动完成搜索-下载-解析-入库全流程
-            4. 折叠区内会显示待处理数量提示
+            系统的"语言"选项控制的是 **AI 用哪种语言回答你**，不是翻译论文内容：
+            - 选择"中文"：AI 用中文回答，但引用的论文原文仍是英文
+            - 选择"English"：AI 用英文回答
 
-            **论文列表与搜索：**
-            - 搜索框支持按关键词、作者、年份过滤
-            - 点击论文标题展开摘要和操作按钮
-            - 已入库论文显示「已入库」标签，待处理论文显示「待处理」标签
-
-            **处理待处理论文：**
-            - 仅搜索但未下载/解析的论文会标记为「待处理」
-            - 点击「处理」按钮自动下载 PDF、解析、向量化入库
-
-            **快速预览：**
-            - 已入库论文点击「预览」可在页面内查看 PDF
-            - 点击「摘要」跳转到摘要页面
-            - 点击「引用」跳转到引用关系页面
+            如果你看到标题/摘要是中文的，那是原作者自己写的中文 —— arXiv 上确实有一些中文论文，特别是国内学者投稿的。
             """)
 
-        with st.expander("摘要 & 综述"):
+        with st.expander("智能问答 vs 智能分析"):
             st.markdown("""
-            **论文内容提炼与综合分析。**
+            | | 智能问答 | 智能分析 (Agent) |
+            |--|---------|-----------------|
+            | 怎么工作 | 搜相关片段 → 一次性回答 | AI 自己决定用哪些工具，分步执行 |
+            | 能做什么 | 针对已有论文提问 | 搜索、摘要、对比、推荐、综述等 |
+            | 速度 | 快（一次调用） | 慢（可能调用多次） |
+            | 适合 | 查具体问题 | 综合研究任务 |
 
-            **单篇摘要：**
-            1. 输入论文 arXiv ID（如 `2301.12345`）
-            2. 选择输出语言
-            3. 点击生成，得到三段式结构化摘要：问题背景 / 方法核心 / 实验结论
-
-            **多论文综述：**
-            1. 输入综述主题关键词
-            2. 设置检索论文数量
-            3. 可选配置输出语言和输出格式（Markdown 原文 / JSON 结构化 / 下载 TXT）
-            4. 系统自动检索相关论文并生成综合综述
-
-            **相似推荐：**
-            1. 输入论文 arXiv ID
-            2. 设置推荐数量
-            3. 系统基于向量相似度返回最相关论文列表
-
-            **前提条件：** 论文需要先完成入库（向量化），否则无法检索和生成。
+            **简单说：** 问"这篇论文用了什么方法"用问答；说"帮我梳理这个方向的技术路线"用智能分析。
             """)
 
-        with st.expander("引用关系"):
+        with st.expander("温度 (Temperature) 是什么？"):
             st.markdown("""
-            **论文引用图谱查看与分析。**
+            温度控制 AI 回答的**随机性**：
 
-            **使用方法：**
-            1. 输入论文 arXiv ID
-            2. 页面显示该论文引用了哪些论文（出度）和被哪些论文引用（入度）
-            3. 库内已收录的论文标记为「在库」，未收录的标记为「外链」
+            - **0 ~ 0.3（低）**：回答稳定、严谨、重复性强。适合需要准确答案的场合
+            - **0.3 ~ 0.7（中）**：平衡创造性和准确性。适合一般问答
+            - **0.7 ~ 1.5（高）**：回答多变、有创造性、也可能跑偏。适合头脑风暴
 
-            **引用提取：**
-            - 点击「批量提取引用」从已入库论文的 PDF 中自动提取引用关系
-            - 提取结果存入数据库，后续可直接查询
-
-            **前提条件：**
-            - 论文 PDF 需已下载到 raw/ 目录
-            - 批量提取功能需要 PDF 解析工具支持
+            默认值是 0.3（问答）和 0.1（智能分析），对学术用途来说偏低是合理的。
             """)
 
-        with st.expander("数据管理"):
+        with st.expander("代码块、数学公式等特殊内容"):
             st.markdown("""
-            **数据入库、导出与历史管理。**
+            当前系统对论文正文做**纯文本处理**，对特殊内容有限制：
 
-            **入库标签页：**
-            - 显示当前向量库 chunks 数量和已入库论文列表
-            - 「执行入库」将 parsed/ 目录下的 JSON 解析文件向量化存入 ChromaDB
-            - 「清空并重建」删除你的全部向量数据后重新导入（SQLite 元数据不受影响）
+            | 内容类型 | 处理方式 |
+            |---------|---------|
+            | 普通段落文字 | 正常分块、检索、问答 |
+            | 数学公式 (LaTeX) | 作为纯文本保留，可能被截断 |
+            | 代码块 | 作为纯文本保留 |
+            | 表格 | GROBID 引擎可提取为 Markdown，但暂未加入检索 |
+            | 图片/图表 | 仅提取标题，图片内容不处理 |
+            | 多栏排版 | 按文档顺序读取，可能打乱阅读顺序 |
 
-            **导出标签页：**
-            - 选择导出格式：JSON / CSV / BibTeX
-            - 设置导出数量（10-500）
-            - 选择导出类型：论文元数据或查询历史
-
-            **历史标签页：**
-            - 查看和清空查询历史记录
-
-            **数据目录说明：**
-            - `data/raw/` — 下载的 PDF 原文
-            - `data/parsed/` — 解析后的 JSON 文件
-            - `data/paper_assistant.db` — SQLite 元数据库
-            - `data/chroma_db/` — ChromaDB 向量库
+            如果你研究的论文含有大量公式或代码，**问答时尽量描述概念而非直接复制公式**，检索效果更好。
             """)
 
-        with st.expander("系统设置"):
+        with st.expander("各页面功能速览"):
             st.markdown("""
-            **系统状态监控与维护。**
-
-            **状态标签页：**
-            - 向量库统计：chunks 总数及分用户数量
-            - 缓存命中率：LLM 缓存和 Embedding 缓存命中率
-            - 「清空缓存」按钮可在回答质量异常时刷新缓存
-
-            **备份标签页：**
-            - 「立即备份」将 ChromaDB 向量库打包备份到 backups/ 目录
-            - 备份列表显示历史备份及文件大小
-            - 点击「恢复」从指定备份恢复向量库（会覆盖当前数据）
-
-            **配置标签页：**
-            - 显示当前运行配置摘要（API 端口、模型、路径等）
-            - 「清空向量库」完全删除 ChromaDB 数据（不可逆）
+            | 页面 | 一句话说明 |
+            |------|-----------|
+            | 智能问答 | 对已有论文提问，AI 从论文里找答案 |
+            | 智能分析 | AI 自主使用多种工具完成复杂任务 |
+            | 论文库 | 搜索 arXiv、管理论文、查看 PDF |
+            | 摘要 & 综述 | 生成单篇摘要、多篇综述、找相似论文 |
+            | 引用关系 | 查看论文之间的引用网络 |
+            | 数据管理 | 入库、导出、备份数据 |
+            | 系统设置 | 查看状态、清缓存、备份恢复 |
             """)
 
         with st.expander("常见问题"):
             st.markdown("""
-            **Q: 论文搜索到了但回答没有相关内容？**
-            A: 检查论文是否已入库（标签应为「已入库」而非「待处理」）。待处理论文仅有元数据，没有向量化，无法被检索到。
+            **Q: 论文显示了但"块数"是 0？**
+            A: 论文还没入库。在论文库点击"处理"按钮，系统会自动下载 PDF → 解析 → 向量化。
 
-            **Q: PDF 预览显示不存在？**
-            A: 论文 PDF 未下载到 raw/ 目录。在论文库中点击「处理」按钮下载 PDF，或手动下载后放入 data/raw/ 目录。
+            **Q: 怎么看不到我刚抓的论文？**
+            A: 检查页面搜索框是否清空，或确认论文状态是"已入库"而非"待处理"。
 
-            **Q: Agent 回答不完整或中断？**
-            A: 可能是 LLM API 超时或 token 限制。尝试缩短问题描述，或减少需要处理的论文数量。
+            **Q: 问答说"向量库为空"？**
+            A: 没有论文入库过。先去论文库抓论文并点击"处理"，或去数据管理页面执行"入库"。
 
-            **Q: 向量库清空后如何恢复？**
-            A: 执行「入库」操作，系统会扫描 parsed/ 目录下的所有 JSON 文件重新向量化（前提是 JSON 文件未删除）。如果之前做过备份，可以从备份恢复。
+            **Q: PDF 预览打不开？**
+            A: PDF 还没下载。点击论文库的"处理"按钮下载。
 
-            **Q: 多用户之间数据是否隔离？**
-            A: 是的。SQLite 元数据通过 owner_id 隔离，ChromaDB 向量数据通过用户维度的 collection 隔离。每个用户只能看到自己的论文和查询历史。
+            **Q: Agent 回答不完整？**
+            A: 可能是 API 超时或步数不够。增加步数滑块值，或缩短问题的复杂度。
+
+            **Q: 多个用户的数据会混在一起吗？**
+            A: 不会。每个用户的数据通过 owner_id 隔离，互不可见。
             """)
 
     render_help()

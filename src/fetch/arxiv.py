@@ -53,6 +53,10 @@ def parse_xml(xml_content):
         authors = [a.find('atom:name', ns).text for a in entry.findall('atom:author', ns)]
         published = entry.find('atom:published', ns).text
 
+        # 提取 arXiv 分类
+        categories = [c.attrib.get('term', '') for c in entry.findall('atom:category', ns)]
+        primary_cat = categories[0] if categories else ''
+
         pdf_url = None
         for link in entry.findall('atom:link', ns):
             href = link.attrib.get('href', '')
@@ -71,7 +75,9 @@ def parse_xml(xml_content):
             'authors': ", ".join(authors),
             'summary': summary,
             'published': published,
-            'pdf_url': pdf_url
+            'pdf_url': pdf_url,
+            'categories': categories,
+            'primary_category': primary_cat,
         })
 
     logger.info("arXiv fetch: 获取 %d 篇论文", len(papers))
@@ -86,6 +92,8 @@ def save_metadata_to_db(papers: List[Dict], owner_id: str = "") -> int:
     saved = 0
     for p in papers:
         try:
+            cat = p.get("primary_category", "")
+            source_str = f"arxiv:{cat}" if cat else "arxiv"
             paper_dao.insert(Paper(
                 arxiv_id=p["id"],
                 title=p.get("title") or "",
@@ -93,7 +101,7 @@ def save_metadata_to_db(papers: List[Dict], owner_id: str = "") -> int:
                 abstract=p.get("summary") or "",
                 published=p.get("published") or "",
                 pdf_url=p.get("pdf_url") or "",
-                source="arxiv",
+                source=source_str,
                 ingest_status="pending",
                 chunk_count=0,
                 owner_id=owner_id,
