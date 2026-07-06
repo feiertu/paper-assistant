@@ -351,7 +351,7 @@ NAV_ITEMS = [
     ("agent",     "Agent 分析"),
     ("library",   "论文库"),
     ("summary",   "摘要 & 综述"),
-    ("citations", "引用网络"),
+    ("citations", "引用关系"),
     ("data",      "数据管理"),
     ("system",    "系统设置"),
 ]
@@ -788,12 +788,12 @@ elif page_key == "summary":
 
 
 # ══════════════════════════════════════════════════════════════
-#  页面 4: 引用网络
+#  页面 4: 引用关系
 # ══════════════════════════════════════════════════════════════
 
 elif page_key == "citations":
     def render_citations():
-        st.markdown('<div class="page-title">引用网络</div>', unsafe_allow_html=True)
+        st.markdown('<div class="page-title">引用关系</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">查看论文之间的引用关系，提取和分析引用图谱。</p>',
                     unsafe_allow_html=True)
 

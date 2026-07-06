@@ -2,14 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 系统依赖（PyMuPDF 需要）
+# 系统依赖（PyMuPDF + gosu 用于运行时降权）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# 创建非 root 用户
-RUN groupadd -r paper && useradd -r -g paper -d /app paper
+# 创建非 root 用户（固定 UID=1000 避免 volume 权限漂移）
+RUN groupadd -r -g 1000 paper && useradd -r -g paper -d /app -u 1000 paper
 
 # Python 依赖
 COPY requirements.txt requirements.lock ./
@@ -27,9 +28,6 @@ EXPOSE 8000 8501
 
 COPY --chown=paper:paper entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# 切换到非 root 用户
-USER paper
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
