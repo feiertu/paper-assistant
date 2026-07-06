@@ -32,9 +32,12 @@ class _OpenAIBackend:
         from openai import OpenAI
 
         config.require_openai_key()
+        # 优先使用 embedding 专用配置，否则回退到 LLM 配置
+        api_key = config.EMBEDDING_API_KEY or config.OPENAI_API_KEY
+        base_url = config.EMBEDDING_BASE_URL or config.OPENAI_BASE_URL
         self._client = OpenAI(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
+            api_key=api_key,
+            base_url=base_url,
         )
         self._model = model_name
 

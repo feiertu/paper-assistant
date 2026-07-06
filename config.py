@@ -77,6 +77,9 @@ EMBEDDING_PROVIDER: str = _env("EMBEDDING_PROVIDER", "openai,voyage") or "openai
 EMBEDDING_MODEL: str = _env("EMBEDDING_MODEL", "text-embedding-3-large") or "text-embedding-3-large"
 EMBEDDING_DIM: int = _env_int("EMBEDDING_DIM", 1024)
 EMBEDDING_BATCH_SIZE: int = _env_int("EMBEDDING_BATCH_SIZE", 32)
+# 独立 API 配置（不设则回退到 OPENAI_API_KEY / OPENAI_BASE_URL）
+EMBEDDING_API_KEY: Optional[str] = _env("EMBEDDING_API_KEY")
+EMBEDDING_BASE_URL: Optional[str] = _env("EMBEDDING_BASE_URL")
 # RRF 重排序参数
 RRF_TOP_N: int = _env_int("RRF_TOP_N", 20)  # 每路检索取 top-N 进行融合
 RRF_K: int = _env_int("RRF_K", 60)  # RRF 平滑常数
