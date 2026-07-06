@@ -485,6 +485,65 @@ def arxiv_pipeline(req: ArxivPipelineRequest):
     return {"status": "ok", "steps": steps}
 
 
+@app.post("/arxiv/process-pending")
+def arxiv_process_pending():
+    """处理所有 pending 状态论文：下载 PDF → 解析 → 入库。"""
+    from src.db import get_dao
+    from src.fetch.download_pdf import download_with_resume
+    import json as _json
+    from src.parse.pdf import parse_pdf_structure
+
+    dao = get_dao("paper")
+    all_papers = dao.find_all(limit=200)
+    pending = [p for p in all_papers if p.ingest_status == "pending" and p.pdf_url]
+    if not pending:
+        return {"status": "ok", "processed": 0, "message": "没有待处理的论文"}
+
+    # 1. 下载
+    dl_ok, dl_fail = 0, 0
+    for paper in pending:
+        try:
+            ok = download_with_resume(paper.pdf_url, paper.arxiv_id)
+            if ok:
+                dl_ok += 1
+            else:
+                dl_fail += 1
+        except Exception:
+            dl_fail += 1
+
+    # 2. 解析
+    parsed_dir = config.PARSED_DIR
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    parsed_cnt = 0
+    for paper in pending:
+        pdf_path = config.RAW_PDF_DIR / f"{paper.arxiv_id}.pdf"
+        json_path = parsed_dir / f"{paper.arxiv_id}.json"
+        if pdf_path.exists() and not json_path.exists():
+            try:
+                structure = parse_pdf_structure(str(pdf_path))
+                json_path.write_text(_json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8")
+                parsed_cnt += 1
+            except Exception as e:
+                logger.error("解析失败 %s: %s", paper.arxiv_id, e)
+
+    # 3. 入库
+    ingest_result = {"papers": 0, "chunks": 0}
+    if parsed_cnt > 0:
+        result = ingest_parsed_dir()
+        if "error" not in result:
+            ingest_result = result
+
+    return {
+        "status": "ok",
+        "total": len(pending),
+        "downloaded": dl_ok,
+        "download_failed": dl_fail,
+        "parsed": parsed_cnt,
+        "ingested": ingest_result.get("papers", 0),
+        "chunks": ingest_result.get("chunks", 0),
+    }
+
+
 # ── 向量库管理 ──
 
 @app.get("/store/stats")

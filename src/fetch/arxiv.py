@@ -61,6 +61,9 @@ def parse_xml(xml_content):
                 link.attrib.get('title') == 'pdf'):
                 pdf_url = href
                 break
+        # arXiv 标准 PDF URL 作为兜底
+        if not pdf_url:
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
         papers.append({
             'id': arxiv_id,

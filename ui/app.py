@@ -729,7 +729,32 @@ elif page_key == "library":
                         except Exception as e:
                             st.error(str(e))
 
+        # ── 处理待处理论文 ──
         dao = get_dao("paper")
+        pending_count = len([p for p in dao.find_all(limit=200) if p.ingest_status == "pending"])
+        if pending_count > 0:
+            st.warning(f"📋 {pending_count} 篇论文待处理（仅元数据，尚未解析入库）", icon="⚠️")
+            if st.button("⚡ 一键处理", type="primary", key="process_pending_btn",
+                        help=f"下载 PDF → 解析 → 入库（{pending_count} 篇）"):
+                with st.spinner(f"处理 {pending_count} 篇论文…"):
+                    try:
+                        resp = requests.post(
+                            f"http://127.0.0.1:{config.API_PORT}/arxiv/process-pending",
+                            headers=_api_headers, timeout=600,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            st.success(
+                                f"下载 {data['downloaded']} 篇 / "
+                                f"解析 {data['parsed']} 篇 / "
+                                f"入库 {data['ingested']} 篇 ({data['chunks']} chunks)"
+                            )
+                            st.rerun()
+                        else:
+                            st.error(str(resp.json()))
+                    except Exception as e:
+                        st.error(str(e))
+
         total = dao.count()
 
         col1, col2, col3 = st.columns([3, 2, 1])
