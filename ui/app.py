@@ -638,6 +638,11 @@ elif page_key == "library":
 
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
+            # 内部 API 鉴权
+            _api_headers = {}
+            if config.API_AUTH_ENABLED and config.API_AUTH_KEY:
+                _api_headers["X-API-Key"] = config.API_AUTH_KEY
+
             col_q1, col_q2, col_q3 = st.columns([3, 1, 1])
             with col_q1:
                 fetch_query = st.text_input(
@@ -661,7 +666,7 @@ elif page_key == "library":
                             resp = requests.post(
                                 f"http://127.0.0.1:{config.API_PORT}/arxiv/fetch",
                                 json={"query": fetch_query, "max_results": fetch_n},
-                                timeout=120,
+                                headers=_api_headers, timeout=120,
                             )
                             if resp.status_code == 200:
                                 data = resp.json()
@@ -682,7 +687,7 @@ elif page_key == "library":
                             resp = requests.post(
                                 f"http://127.0.0.1:{config.API_PORT}/arxiv/download",
                                 json={"query": fetch_query, "max_results": fetch_n},
-                                timeout=300,
+                                headers=_api_headers, timeout=300,
                             )
                             if resp.status_code == 200:
                                 data = resp.json()
@@ -701,7 +706,7 @@ elif page_key == "library":
                                 f"http://127.0.0.1:{config.API_PORT}/arxiv/pipeline",
                                 json={"query": fetch_query, "max_results": fetch_n,
                                       "auto_ingest": fetch_auto},
-                                timeout=600,
+                                headers=_api_headers, timeout=600,
                             )
                             if resp.status_code == 200:
                                 data = resp.json()

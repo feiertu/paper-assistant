@@ -28,6 +28,11 @@ tests/_test_data/
 # 环境变量
 .env
 
+# 测试
+.coverage
+coverage.xml
+.pytest_cache/
+
 # IDE
 .vscode/
 .idea/
