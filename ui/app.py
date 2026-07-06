@@ -408,17 +408,6 @@ def render_sidebar():
             st.session_state.nav_page = new_key
             st.rerun()
 
-        st.divider()
-
-        try:
-            s = get_store_stats()
-        except Exception:
-            s = {"count": 0}
-        col_a, col_b = st.columns(2)
-        col_a.metric("Chunks", s["count"])
-        model_short = config.LLM_MODEL[:12] + "…" if len(config.LLM_MODEL) > 12 else config.LLM_MODEL
-        col_b.metric("Model", model_short)
-
         # ── 用户区域（sidebar 底部）──
         st.divider()
         user = st.session_state.user
@@ -658,7 +647,6 @@ elif page_key == "library":
 
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
-            # 内部 API 鉴权 + 用户隔离
             _api_headers = {}
             if config.API_AUTH_ENABLED and config.API_AUTH_KEY:
                 _api_headers["X-API-Key"] = config.API_AUTH_KEY
@@ -668,113 +656,82 @@ elif page_key == "library":
             with col_q1:
                 fetch_query = st.text_input(
                     "arXiv 查询", value=config.ARXIV_QUERY,
-                    placeholder="例如: cat:cs.AI AND ti:learning",
+                    placeholder="cat:cs.AI AND ti:learning",
                     help="arXiv API 搜索语法：cat:cs.CL (分类), ti:transformer (标题), au:bengio (作者)",
                     key="arxiv_query",
                 )
             with col_q2:
                 fetch_n = st.number_input("篇数", min_value=1, max_value=50, value=5, key="arxiv_n")
             with col_q3:
-                fetch_auto = st.checkbox("自动入库", value=True, key="arxiv_auto",
-                                         help="下载+解析后自动向量化入库")
+                st.write("")  # spacer
+                do_fetch = st.button("⚡ 一键抓取", use_container_width=True, type="primary",
+                                     key="arxiv_pipeline_btn",
+                                     help="搜索 arXiv → 下载 PDF → 解析 → 入库 全自动")
 
-            col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
-            with col_b1:
-                if st.button("🔍 搜索元数据", use_container_width=True, key="arxiv_search_btn",
-                             help="仅从 arXiv 搜索论文信息，不下载 PDF"):
-                    with st.spinner("搜索 arXiv…"):
-                        try:
-                            resp = requests.post(
-                                f"http://127.0.0.1:{config.API_PORT}/arxiv/fetch",
-                                json={"query": fetch_query, "max_results": fetch_n},
-                                headers=_api_headers, timeout=120,
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                st.success(f"找到 {data['count']} 篇论文")
-                                for p in data.get("papers", []):
-                                    st.caption(f"📄 {p['arxiv_id']}: {p['title']}")
-                                st.info("点击「一键抓取」下载 PDF 并入库")
-                            else:
-                                st.error(resp.json().get("detail", str(resp.status_code)))
-                        except Exception as e:
-                            st.error(str(e))
+            if do_fetch:
+                with st.spinner("搜索 arXiv → 下载 PDF → 解析 → 入库…"):
+                    try:
+                        resp = requests.post(
+                            f"http://127.0.0.1:{config.API_PORT}/arxiv/pipeline",
+                            json={"query": fetch_query, "max_results": fetch_n, "auto_ingest": True},
+                            headers=_api_headers, timeout=600,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            for s in data.get("steps", []):
+                                icons = {"fetch": "🔍 搜索", "download": "📄 下载",
+                                         "parse": "📝 解析", "ingest": "📦 入库"}
+                                label = icons.get(s["step"], s["step"])
+                                if s["step"] == "fetch":
+                                    st.write(f"{label}: 找到 {s['count']} 篇")
+                                elif s["step"] == "download":
+                                    failed = s.get("failed", 0)
+                                    extra = f", 失败 {failed} 篇" if failed else ""
+                                    st.write(f"{label}: 成功 {s['success']} 篇{extra}")
+                                elif s["step"] == "parse":
+                                    st.write(f"{label}: {s['count']} 篇")
+                                elif s["step"] == "ingest":
+                                    st.write(f"{label}: {s['papers']} 篇 / {s['chunks']} chunks")
+                            st.success("管道完成！同名论文自动去重。")
+                            st.rerun()
+                        else:
+                            st.error(resp.json().get("detail", str(resp.status_code)))
+                    except Exception as e:
+                        st.error(str(e))
 
-            with col_b2:
-                if st.button("📄 下载 PDF", use_container_width=True, key="arxiv_dl_btn",
-                             help="下载已搜索到的论文 PDF（需先搜索）"):
-                    with st.spinner("下载中…"):
-                        try:
-                            resp = requests.post(
-                                f"http://127.0.0.1:{config.API_PORT}/arxiv/download",
-                                json={"query": fetch_query, "max_results": fetch_n},
-                                headers=_api_headers, timeout=300,
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                st.success(f"下载 {data['downloaded']} 篇, 失败 {data.get('failed', 0)} 篇")
-                            else:
-                                st.error(resp.json().get("detail", str(resp.status_code)))
-                        except Exception as e:
-                            st.error(str(e))
-
-            with col_b3:
-                if st.button("⚡ 一键抓取", use_container_width=True, type="primary", key="arxiv_pipeline_btn",
-                             help="搜索 → 下载 → 解析 → 入库 全自动"):
-                    with st.spinner("全自动管道运行中…"):
-                        try:
-                            resp = requests.post(
-                                f"http://127.0.0.1:{config.API_PORT}/arxiv/pipeline",
-                                json={"query": fetch_query, "max_results": fetch_n,
-                                      "auto_ingest": fetch_auto},
-                                headers=_api_headers, timeout=600,
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                for s in data.get("steps", []):
-                                    step_name = {"fetch": "搜索", "download": "下载",
-                                                 "parse": "解析", "ingest": "入库"}.get(s["step"], s["step"])
-                                    if s["step"] == "fetch":
-                                        st.write(f"🔍 {step_name}: 找到 {s['count']} 篇")
-                                    elif s["step"] == "download":
-                                        st.write(f"📄 {step_name}: 成功 {s['success']} 篇" +
-                                                 (f", 失败 {s['failed']} 篇" if s.get("failed") else ""))
-                                    elif s["step"] == "parse":
-                                        st.write(f"📝 {step_name}: {s['count']} 篇")
-                                    elif s["step"] == "ingest":
-                                        st.write(f"📦 {step_name}: {s['papers']} 篇/{s['chunks']} chunks")
-                                st.success("管道完成！刷新页面查看新论文。")
-                                st.rerun()
-                            else:
-                                st.error(resp.json().get("detail", str(resp.status_code)))
-                        except Exception as e:
-                            st.error(str(e))
+            # 显示当前待处理数
+            pending_count = len([p for p in dao.find_all(limit=200, owner_id=owner_id) if p.ingest_status == "pending"])
+            if pending_count > 0:
+                st.info(f"📋 {pending_count} 篇论文仅有元数据，可点击下方按钮处理", icon="ℹ️")
 
         # ── 处理待处理论文 ──
         dao = get_dao("paper")
         pending_count = len([p for p in dao.find_all(limit=200, owner_id=owner_id) if p.ingest_status == "pending"])
         if pending_count > 0:
-            st.warning(f"📋 {pending_count} 篇论文待处理（仅元数据，尚未解析入库）", icon="⚠️")
-            if st.button("⚡ 一键处理", type="primary", key="process_pending_btn",
-                        help=f"下载 PDF → 解析 → 入库（{pending_count} 篇）"):
-                with st.spinner(f"处理 {pending_count} 篇论文…"):
-                    try:
-                        resp = requests.post(
-                            f"http://127.0.0.1:{config.API_PORT}/arxiv/process-pending",
-                            headers=_api_headers, timeout=600,
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            st.success(
-                                f"下载 {data['downloaded']} 篇 / "
-                                f"解析 {data['parsed']} 篇 / "
-                                f"入库 {data['ingested']} 篇 ({data['chunks']} chunks)"
+            col_p1, col_p2 = st.columns([3, 1])
+            with col_p1:
+                st.warning(f"📋 {pending_count} 篇论文待处理（已搜索但未下载/解析/入库）", icon="⚠️")
+            with col_p2:
+                if st.button("🔧 处理", type="primary", key="process_pending_btn",
+                            help=f"下载 PDF → 解析 → 入库 ({pending_count} 篇)"):
+                    with st.spinner(f"处理 {pending_count} 篇论文…"):
+                        try:
+                            resp = requests.post(
+                                f"http://127.0.0.1:{config.API_PORT}/arxiv/process-pending",
+                                headers=_api_headers, timeout=600,
                             )
-                            st.rerun()
-                        else:
-                            st.error(str(resp.json()))
-                    except Exception as e:
-                        st.error(str(e))
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                st.success(
+                                    f"下载 {data['downloaded']} / "
+                                    f"解析 {data['parsed']} / "
+                                    f"入库 {data['ingested']} ({data['chunks']} chunks)"
+                                )
+                                st.rerun()
+                            else:
+                                st.error(str(resp.json()))
+                        except Exception as e:
+                            st.error(str(e))
 
         total = dao.count(owner_id=owner_id)
 
@@ -792,24 +749,21 @@ elif page_key == "library":
                                    format_func=lambda x: {"created_at": "入库", "title": "标题", "published": "日期"}[x],
                                    label_visibility="collapsed")
 
-        col_a2, col_b2, col_c2, col_d2 = st.columns([2, 2, 1, 1])
+        col_a2, col_b2, col_c2 = st.columns([3, 1, 1])
         with col_a2:
             author = st.text_input("作者", placeholder="模糊匹配", label_visibility="collapsed")
         with col_b2:
-            source = st.selectbox("来源", ["", "arxiv", "grobid", "pymupdf", "manual"],
-                                  format_func=lambda x: x or "全部来源", label_visibility="collapsed")
-        with col_c2:
             status_filter = st.selectbox("状态", ["", "ingested", "pending", "failed"],
                                          format_func=lambda x: {"": "全部", "ingested": "入库", "pending": "待处理", "failed": "失败"}[x],
                                          label_visibility="collapsed")
-        with col_d2:
+        with col_c2:
             limit = st.selectbox("条数", [20, 50, 100, 200], index=1, label_visibility="collapsed")
 
-        if keyword or author or year_from or year_to or source or status_filter:
+        if keyword or author or year_from or year_to or status_filter:
             papers = dao.search(
                 keyword=keyword, limit=limit, author=author,
                 year_from=year_from, year_to=year_to,
-                source=source, status=status_filter, sort_by=sort_by,
+                status=status_filter, sort_by=sort_by,
                 owner_id=owner_id,
             )
         else:
@@ -851,6 +805,7 @@ elif page_key == "library":
 
 elif page_key == "summary":
     def render_summary():
+        owner_id = st.session_state.owner_id
         st.markdown('<div class="page-title">摘要 & 综述</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">生成论文摘要、多论文综述，或基于向量相似度推荐相关研究。</p>',
                     unsafe_allow_html=True)
@@ -859,7 +814,7 @@ elif page_key == "summary":
 
         with tab_sum:
             st.subheader("生成单篇论文的结构化摘要")
-            papers = list_papers()
+            papers = list_papers(owner_id=owner_id)
             if not papers:
                 st.info("暂无论文，请先导入数据。")
             else:
@@ -897,7 +852,7 @@ elif page_key == "summary":
 
         with tab_rec:
             st.subheader("基于向量相似度推荐相似论文")
-            papers_r = list_papers()
+            papers_r = list_papers(owner_id=owner_id)
             if not papers_r:
                 st.info("暂无论文，无法推荐。")
             else:
@@ -935,11 +890,12 @@ elif page_key == "summary":
 
 elif page_key == "citations":
     def render_citations():
+        owner_id = st.session_state.owner_id
         st.markdown('<div class="page-title">引用关系</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">查看论文之间的引用关系，提取和分析引用图谱。</p>',
                     unsafe_allow_html=True)
 
-        papers = list_papers()
+        papers = list_papers(owner_id=owner_id)
         if not papers:
             st.info("暂无论文。")
         else:
@@ -1005,6 +961,7 @@ elif page_key == "citations":
 
 elif page_key == "data":
     def render_data():
+        owner_id = st.session_state.owner_id
         st.markdown('<div class="page-title">数据管理</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">论文入库、数据导出、查询历史管理。</p>',
                     unsafe_allow_html=True)
@@ -1013,10 +970,14 @@ elif page_key == "data":
 
         with tab_inj:
             st.subheader("论文数据入库")
+            st.caption(
+                "入库条件：论文的 PDF 已放在 raw/ 目录，且 parsed/ 目录已有对应 JSON 解析文件。"
+                "可通过「论文库 → 一键抓取」自动完成全流程。"
+            )
             stats_ing = get_store_stats()
             st.metric("当前向量库 chunks", stats_ing["count"])
 
-            papers_existing = list_papers()
+            papers_existing = list_papers(owner_id=owner_id)
             if papers_existing:
                 with st.expander(f"已入库论文（{len(papers_existing)} 篇）", expanded=False):
                     for p in papers_existing:
@@ -1024,10 +985,11 @@ elif page_key == "data":
 
             col_i1, col_i2 = st.columns(2)
             with col_i1:
-                if st.button("执行入库", type="primary", use_container_width=True):
+                if st.button("执行入库", type="primary", use_container_width=True,
+                            help="将 parsed/ 目录下所有 JSON 解析文件向量化入库"):
                     pb = st.progress(0, "扫描解析目录…")
                     try:
-                        result = ingest_parsed_dir()
+                        result = ingest_parsed_dir(owner_id=owner_id)
                         pb.progress(100, "完成")
                         if "error" in result:
                             st.error(result["error"])
@@ -1037,13 +999,20 @@ elif page_key == "data":
                     except Exception as e:
                         st.error(str(e))
             with col_i2:
-                if st.button("清空并重建", type="secondary", use_container_width=True):
-                    st.warning("此操作将删除全部向量数据！")
-                    if st.button("确认清空", type="primary"):
+                if st.button("🗑️ 清空并重建", type="secondary", use_container_width=True,
+                            help="删除向量库全部数据后重新导入——不可逆！"):
+                    st.error("⚠️ 此操作将删除你名下全部向量数据，不可撤销！")
+                    st.markdown(
+                        "- 论文元数据（SQLite）不受影响\n"
+                        "- 向量检索结果将暂时为空\n"
+                        "- 有 parsed JSON 则可重新入库\n"
+                        "- 建议先用「导出」备份"
+                    )
+                    if st.button("我确认，立即清空", type="primary"):
                         reset_store()
-                        result = ingest_parsed_dir()
+                        result = ingest_parsed_dir(owner_id=owner_id)
                         if "error" not in result:
-                            st.success(f"重建：{result['papers']} 篇/{result['chunks']} chunks")
+                            st.success(f"重建完成：{result['papers']} 篇 / {result['chunks']} chunks")
                             st.rerun()
 
         with tab_exp:
