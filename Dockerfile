@@ -14,7 +14,7 @@ RUN groupadd -r -g 1000 paper && useradd -r -g paper -d /app -u 1000 paper
 
 # Python 依赖
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 项目代码
 COPY --chown=paper:paper . .
