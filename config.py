@@ -133,7 +133,7 @@ API_PORT: int = _env_int("API_PORT", 8000)
 
 # ---------- Streamlit UI ----------
 
-UI_TITLE: str = _env("UI_TITLE", "📚 Paper Assistant") or "📚 Paper Assistant"
+UI_TITLE: str = _env("UI_TITLE", "Paper Assistant") or "Paper Assistant"
 
 # ---------- 日志 ----------
 
@@ -170,8 +170,8 @@ def summary() -> dict:
         "CHUNK_SIZE": CHUNK_SIZE,
         "CHUNK_OVERLAP": CHUNK_OVERLAP,
         "EMBEDDING_PROVIDER": EMBEDDING_PROVIDER,
-        "EMBEDDING_MODEL": EMBDDING_MODEL,
-        "EMBEDDING_DIM": EMBDDING_DIM,
+        "EMBEDDING_MODEL": EMBEDDING_MODEL,
+        "EMBEDDING_DIM": EMBEDDING_DIM,
         "RRF_TOP_N": RRF_TOP_N,
         "LLM_MODEL": LLM_MODEL,
         "LLM_QA_MODEL": LLM_QA_MODEL,

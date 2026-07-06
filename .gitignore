@@ -17,8 +17,13 @@ data/processed/
 data/parsed/
 data/paper_assistant.db
 data/chroma_backup/
+data/users.json
+data/reg_rate_limit.json
 tests/_test_data/
 *.pdf
+
+# Streamlit
+.streamlit/credentials.toml
 
 # 环境变量
 .env
