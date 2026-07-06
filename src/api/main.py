@@ -346,6 +346,145 @@ def ingest_text_route(req: IngestTextRequest):
     return result
 
 
+# ── arXiv 抓取管道 ──
+
+class ArxivFetchRequest(BaseModel):
+    query: str = Field(default="", description="arXiv 搜索查询，留空使用默认配置")
+    max_results: int = Field(default=5, ge=1, le=50, description="最多抓取篇数")
+    auto_ingest: bool = Field(default=True, description="下载+解析后自动入库")
+
+
+@app.post("/arxiv/fetch")
+def arxiv_fetch(req: ArxivFetchRequest):
+    """抓取 arXiv 论文：搜索 → 保存元数据。
+
+    返回找到的论文列表及其 ID。
+    """
+    from src.fetch.arxiv import fetch_and_persist
+
+    query = req.query or None
+    papers = fetch_and_persist(query=query, max_results=req.max_results)
+    return {
+        "status": "ok",
+        "count": len(papers),
+        "papers": [{"arxiv_id": p["id"], "title": p["title"][:120]} for p in papers],
+    }
+
+
+@app.post("/arxiv/download")
+def arxiv_download(req: ArxivFetchRequest):
+    """下载已抓取论文的 PDF（需先调用 /arxiv/fetch）。"""
+    from src.fetch.download_pdf import batch_download
+    from src.db import get_dao
+
+    dao = get_dao("paper")
+    papers = dao.find_all(limit=req.max_results)
+    pending = [
+        {"id": p.arxiv_id, "pdf_url": p.pdf_url}
+        for p in papers
+        if p.pdf_url and p.ingest_status == "pending"
+    ]
+    if not pending:
+        return {"status": "ok", "downloaded": 0, "message": "没有待下载的论文"}
+
+    results = batch_download(pending, delay=config.PDF_DOWNLOAD_DELAY)
+    return {
+        "status": "ok",
+        "downloaded": len(results["success"]),
+        "failed": len(results["failed"]),
+        "details": results,
+    }
+
+
+@app.post("/arxiv/parse")
+def arxiv_parse():
+    """解析 raw/ 下所有 PDF 为 JSON（保存到 parsed/）。"""
+    import os
+    from src.parse.pdf import parse_pdf_structure
+
+    raw_dir = config.RAW_PDF_DIR
+    parsed_dir = config.PARSED_DIR
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+
+    pdfs = list(raw_dir.glob("*.pdf"))
+    if not pdfs:
+        return {"status": "ok", "parsed": 0, "message": "raw/ 目录下没有 PDF"}
+
+    success, failed = 0, 0
+    for pdf_path in pdfs:
+        arxiv_id = pdf_path.stem
+        json_path = parsed_dir / f"{arxiv_id}.json"
+        try:
+            if json_path.exists():
+                logger.debug("跳过已解析: %s", arxiv_id)
+                success += 1
+                continue
+            structure = parse_pdf_structure(str(pdf_path))
+            json_path.write_text(json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8")
+            success += 1
+            logger.info("解析成功: %s", arxiv_id)
+        except Exception as e:
+            failed += 1
+            logger.error("解析失败 %s: %s", arxiv_id, e)
+
+    return {"status": "ok", "parsed": success, "failed": failed}
+
+
+class ArxivPipelineRequest(BaseModel):
+    query: str = Field(default="", description="arXiv 搜索查询")
+    max_results: int = Field(default=5, ge=1, le=50)
+    auto_ingest: bool = Field(default=True)
+
+
+@app.post("/arxiv/pipeline")
+def arxiv_pipeline(req: ArxivPipelineRequest):
+    """一键管道：搜索 → 下载 → 解析 → 入库。"""
+    steps = []
+
+    # 1. 搜索并保存元数据
+    from src.fetch.arxiv import fetch_and_persist
+    query = req.query or None
+    papers = fetch_and_persist(query=query, max_results=req.max_results)
+    steps.append({"step": "fetch", "count": len(papers)})
+    if not papers:
+        return {"status": "ok", "steps": steps, "message": "arXiv 搜索无结果"}
+
+    # 2. 下载 PDF
+    from src.fetch.download_pdf import batch_download
+    import time as _time
+    pending = [{"id": p["id"], "pdf_url": p["pdf_url"]} for p in papers if p.get("pdf_url")]
+    dl_result = batch_download(pending, delay=config.PDF_DOWNLOAD_DELAY)
+    steps.append({"step": "download", "success": len(dl_result["success"]),
+                  "failed": len(dl_result["failed"])})
+
+    # 3. 解析 PDF
+    import json as _json
+    from src.parse.pdf import parse_pdf_structure
+    parsed_dir = config.PARSED_DIR
+    parsed_dir.mkdir(parents=True, exist_ok=True)
+    parsed_cnt = 0
+    for p in papers:
+        pdf_path = config.RAW_PDF_DIR / f"{p['id']}.pdf"
+        json_path = parsed_dir / f"{p['id']}.json"
+        if pdf_path.exists() and not json_path.exists():
+            try:
+                structure = parse_pdf_structure(str(pdf_path))
+                json_path.write_text(_json.dumps(structure, ensure_ascii=False, indent=2), encoding="utf-8")
+                parsed_cnt += 1
+            except Exception as e:
+                logger.error("解析失败 %s: %s", p['id'], e)
+    steps.append({"step": "parse", "count": parsed_cnt})
+
+    # 4. 入库
+    if req.auto_ingest and parsed_cnt > 0:
+        result = ingest_parsed_dir()
+        ingest_count = result.get("papers", 0)
+        steps.append({"step": "ingest", "papers": ingest_count,
+                      "chunks": result.get("chunks", 0)})
+
+    return {"status": "ok", "steps": steps}
+
+
 # ── 向量库管理 ──
 
 @app.get("/store/stats")

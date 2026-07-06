@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -633,6 +635,94 @@ elif page_key == "library":
         st.markdown('<div class="page-title">论文库</div>', unsafe_allow_html=True)
         st.markdown('<p class="page-description">浏览、搜索和管理已入库的学术论文。</p>',
                     unsafe_allow_html=True)
+
+        # ── arXiv 抓取 ──
+        with st.expander("📥 从 arXiv 抓取论文", expanded=False):
+            col_q1, col_q2, col_q3 = st.columns([3, 1, 1])
+            with col_q1:
+                fetch_query = st.text_input(
+                    "arXiv 查询", value=config.ARXIV_QUERY,
+                    placeholder="例如: cat:cs.AI AND ti:learning",
+                    help="arXiv API 搜索语法：cat:cs.CL (分类), ti:transformer (标题), au:bengio (作者)",
+                    key="arxiv_query",
+                )
+            with col_q2:
+                fetch_n = st.number_input("篇数", min_value=1, max_value=50, value=5, key="arxiv_n")
+            with col_q3:
+                fetch_auto = st.checkbox("自动入库", value=True, key="arxiv_auto",
+                                         help="下载+解析后自动向量化入库")
+
+            col_b1, col_b2, col_b3 = st.columns([2, 2, 2])
+            with col_b1:
+                if st.button("🔍 搜索元数据", use_container_width=True, key="arxiv_search_btn",
+                             help="仅从 arXiv 搜索论文信息，不下载 PDF"):
+                    with st.spinner("搜索 arXiv…"):
+                        try:
+                            resp = requests.post(
+                                f"http://127.0.0.1:{config.API_PORT}/arxiv/fetch",
+                                json={"query": fetch_query, "max_results": fetch_n},
+                                timeout=120,
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                st.success(f"找到 {data['count']} 篇论文")
+                                for p in data.get("papers", []):
+                                    st.caption(f"📄 {p['arxiv_id']}: {p['title']}")
+                                st.info("点击「一键抓取」下载 PDF 并入库")
+                            else:
+                                st.error(resp.json().get("detail", str(resp.status_code)))
+                        except Exception as e:
+                            st.error(str(e))
+
+            with col_b2:
+                if st.button("📄 下载 PDF", use_container_width=True, key="arxiv_dl_btn",
+                             help="下载已搜索到的论文 PDF（需先搜索）"):
+                    with st.spinner("下载中…"):
+                        try:
+                            resp = requests.post(
+                                f"http://127.0.0.1:{config.API_PORT}/arxiv/download",
+                                json={"query": fetch_query, "max_results": fetch_n},
+                                timeout=300,
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                st.success(f"下载 {data['downloaded']} 篇, 失败 {data.get('failed', 0)} 篇")
+                            else:
+                                st.error(resp.json().get("detail", str(resp.status_code)))
+                        except Exception as e:
+                            st.error(str(e))
+
+            with col_b3:
+                if st.button("⚡ 一键抓取", use_container_width=True, type="primary", key="arxiv_pipeline_btn",
+                             help="搜索 → 下载 → 解析 → 入库 全自动"):
+                    with st.spinner("全自动管道运行中…"):
+                        try:
+                            resp = requests.post(
+                                f"http://127.0.0.1:{config.API_PORT}/arxiv/pipeline",
+                                json={"query": fetch_query, "max_results": fetch_n,
+                                      "auto_ingest": fetch_auto},
+                                timeout=600,
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                for s in data.get("steps", []):
+                                    step_name = {"fetch": "搜索", "download": "下载",
+                                                 "parse": "解析", "ingest": "入库"}.get(s["step"], s["step"])
+                                    if s["step"] == "fetch":
+                                        st.write(f"🔍 {step_name}: 找到 {s['count']} 篇")
+                                    elif s["step"] == "download":
+                                        st.write(f"📄 {step_name}: 成功 {s['success']} 篇" +
+                                                 (f", 失败 {s['failed']} 篇" if s.get("failed") else ""))
+                                    elif s["step"] == "parse":
+                                        st.write(f"📝 {step_name}: {s['count']} 篇")
+                                    elif s["step"] == "ingest":
+                                        st.write(f"📦 {step_name}: {s['papers']} 篇/{s['chunks']} chunks")
+                                st.success("管道完成！刷新页面查看新论文。")
+                                st.rerun()
+                            else:
+                                st.error(resp.json().get("detail", str(resp.status_code)))
+                        except Exception as e:
+                            st.error(str(e))
 
         dao = get_dao("paper")
         total = dao.count()
