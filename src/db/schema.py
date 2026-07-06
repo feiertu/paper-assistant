@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS collection_papers (
 
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
+CREATE INDEX IF NOT EXISTS idx_papers_owner_status ON papers(owner_id, ingest_status);
 CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at);
 CREATE INDEX IF NOT EXISTS idx_query_papers_query ON query_papers(query_id);
 CREATE INDEX IF NOT EXISTS idx_collection_papers_col ON collection_papers(collection_id);

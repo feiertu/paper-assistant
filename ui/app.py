@@ -645,6 +645,8 @@ elif page_key == "library":
         st.markdown('<p class="page-description">浏览、搜索和管理已入库的学术论文。</p>',
                     unsafe_allow_html=True)
 
+        dao = get_dao("paper")
+
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
             _api_headers = {}
@@ -705,7 +707,6 @@ elif page_key == "library":
                 st.info(f"📋 {pending_count} 篇论文仅有元数据，可点击下方按钮处理", icon="ℹ️")
 
         # ── 处理待处理论文 ──
-        dao = get_dao("paper")
         pending_count = len([p for p in dao.find_all(limit=200, owner_id=owner_id) if p.ingest_status == "pending"])
         if pending_count > 0:
             col_p1, col_p2 = st.columns([3, 1])

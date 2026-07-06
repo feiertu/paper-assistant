@@ -279,6 +279,7 @@ footer {{
     background: var(--canvas) !important;
     color: var(--ink) !important;
     font-size: 14px !important;
+    resize: none !important;
 }}
 
 .stTextInput input:focus, .stTextArea textarea:focus {{
