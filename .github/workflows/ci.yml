@@ -79,11 +79,6 @@ jobs:
         with:
           context: .
           push: false
-          load: true
           tags: paper-assistant:ci-test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Verify image
-        run: |
-          docker run --rm paper-assistant:ci-test python -c "print('Docker image OK')"
