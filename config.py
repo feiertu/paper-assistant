@@ -63,6 +63,8 @@ PDF_DOWNLOAD_DELAY: float = _env_float("PDF_DOWNLOAD_DELAY", 3.0)
 
 # ---------- PDF 解析 ----------
 
+# 解析后端：pymupdf（快速/默认）| docling（Markdown/推荐）| grobid（ML/需Docker）
+PDF_PARSER: str = _env("PDF_PARSER", "pymupdf") or "pymupdf"
 PDF_MIN_BODY_SIZE: float = _env_float("PDF_MIN_BODY_SIZE", 6.5)
 
 # ---------- 文本分块 ----------
@@ -130,6 +132,12 @@ VOYAGE_API_KEY: Optional[str] = _env("VOYAGE_API_KEY")
 RAG_TOP_K: int = _env_int("RAG_TOP_K", 5)
 RAG_COLLECTION_NAME: str = _env("RAG_COLLECTION_NAME", "knowledge") or "knowledge"
 
+# ── 混合检索（v3） ──
+HYBRID_RETRIEVAL: bool = _env_bool("HYBRID_RETRIEVAL", True)    # 是否启用混合检索
+BM25_ENABLED: bool = _env_bool("BM25_ENABLED", True)             # BM25 稀疏检索
+RERANKER_ENABLED: bool = _env_bool("RERANKER_ENABLED", True)     # Cross-Encoder 精排
+BM25_WEIGHT: float = _env_float("BM25_WEIGHT", 0.3)             # BM25 在 RRF 中的权重
+
 # ---------- API 服务 ----------
 
 API_HOST: str = _env("API_HOST", "127.0.0.1") or "127.0.0.1"
@@ -174,6 +182,7 @@ def summary() -> dict:
         "PROJECT_ROOT": str(PROJECT_ROOT),
         "DATA_DIR": str(DATA_DIR),
         "CHROMA_DIR": str(CHROMA_DIR),
+        "PDF_PARSER": PDF_PARSER,
         "ARXIV_QUERY": ARXIV_QUERY,
         "ARXIV_MAX_RESULTS": ARXIV_MAX_RESULTS,
         "CHUNK_SIZE": CHUNK_SIZE,
@@ -193,6 +202,10 @@ def summary() -> dict:
         "VOYAGE_API_KEY_SET": bool(VOYAGE_API_KEY),
         "RAG_TOP_K": RAG_TOP_K,
         "RAG_COLLECTION_NAME": RAG_COLLECTION_NAME,
+        "HYBRID_RETRIEVAL": HYBRID_RETRIEVAL,
+        "BM25_ENABLED": BM25_ENABLED,
+        "RERANKER_ENABLED": RERANKER_ENABLED,
+        "BM25_WEIGHT": BM25_WEIGHT,
         "API_HOST": API_HOST,
         "API_PORT": API_PORT,
         "API_AUTH_ENABLED": API_AUTH_ENABLED,

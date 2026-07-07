@@ -21,6 +21,7 @@ data/users.json
 data/reg_rate_limit.json
 tests/_test_data/
 *.pdf
+*.md.tmp
 
 # Streamlit
 .streamlit/credentials.toml

@@ -11,7 +11,7 @@ from typing import Any, Dict, Generator, List, Optional, Sequence
 
 import config
 from src.db import Paper, PaperDAO, QueryDAO, QueryRecord, get_dao
-from src.embed import get_embedder, split_doc, rrf_rerank
+from src.embed import get_embedder, split_doc, rrf_rerank, hybrid_retrieve
 from src.embed.chunk import iter_doc_files, find_parsed_dir, split_text
 from src.logging_config import get_logger
 from src.store import VectorStore, get_store
@@ -204,13 +204,18 @@ def ingest_text(
 # ──────────────────────────────────────────────
 
 def retrieve(
-    query: str, top_k: Optional[int] = None, owner_id: str = ""
+    query: str,
+    top_k: Optional[int] = None,
+    owner_id: str = "",
+    hybrid: bool = True,
 ) -> Dict[str, Any]:
-    """向量检索（单路或 RRF 双路），按 owner_id 隔离。
+    """混合检索（v3 默认）：稠密 + BM25 稀疏 → RRF 融合 → Cross-Encoder 精排。
 
     Args:
         query: 查询文本。
         top_k: 返回命中数，None 则用 config.RAG_TOP_K。
+        owner_id: 多用户隔离标识。
+        hybrid: True=使用 v3 混合检索（默认），False=回退到 RRF 双路。
 
     Returns:
         {"hits": [...], "query": query}
@@ -223,9 +228,14 @@ def retrieve(
         if store.count() == 0:
             return {"hits": [], "query": query}
 
-        if embedder.is_dual:
+        if hybrid:
+            # ── v3 混合检索：稠密 + BM25 + RRF + Cross-Encoder ──
+            hits = hybrid_retrieve(query, top_k=k, owner_id=owner_id)
+        elif embedder.is_dual:
+            # ── v2 RRF 双路（OpenAI + Voyage） ──
             hits = rrf_rerank(query, top_k=k, owner_id=owner_id)
         else:
+            # ── v1 单路稠密检索 ──
             q_vec = embedder.embed_query(query)
             where = {"owner_id": owner_id} if owner_id else None
             hits = store.query(q_vec, top_k=k, where=where)["hits"]
@@ -250,7 +260,7 @@ def answer_rag(
 
     store = _get_store()
     if store.count() == 0:
-        return "⚠️ 向量库为空，请先导入论文数据。"
+        return "[ERROR] 向量库为空，请先导入论文数据。"
 
     result = retrieve(query, top_k=top_k)
     hits = result.get("hits", [])
@@ -295,7 +305,7 @@ def answer_rag_stream(
 
     store = _get_store()
     if store.count() == 0:
-        yield "⚠️ 向量库为空，请先导入论文数据。"
+        yield "[ERROR] 向量库为空，请先导入论文数据。"
         return
 
     result = retrieve(query, top_k=top_k)
@@ -356,7 +366,7 @@ def summarize_paper(
 
     json_path = config.PARSED_DIR / f"{arxiv_id}.json"
     if not json_path.exists():
-        return f"⚠️ 未找到解析文件：{json_path}"
+        return f"[ERROR] 未找到解析文件：{json_path}"
 
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -485,7 +495,7 @@ def analyze_all_papers(
     paper_dao = get_dao("paper")
     papers = paper_dao.find_all(limit=100, owner_id=owner_id)
     if not papers:
-        return "⚠️ 论文库中暂无论文，请先导入数据。"
+        return "[ERROR] 论文库中暂无论文，请先导入数据。"
 
     # 构建论文摘要列表
     paper_summaries = []

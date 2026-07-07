@@ -351,6 +351,157 @@ def rrf_rerank(
     ]
 
 
+# ---------- 混合检索（v3：稠密 + BM25 稀疏 + Cross-Encoder 精排）----------
+
+
+def hybrid_retrieve(
+    query: str,
+    top_k: Optional[int] = None,
+    owner_id: str = "",
+    use_bm25: Optional[bool] = None,
+    use_reranker: Optional[bool] = None,
+    rrf_top_n: Optional[int] = None,
+    bm25_weight: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """混合检索管道：稠密向量 + BM25 稀疏 → RRF 融合 → Cross-Encoder 精排。
+
+    这是 Paper Assistant v3 的核心检索函数，统一替代 rrf_rerank。
+
+    流程：
+      1. 稠密检索（OpenAI / Voyage embedding）→ 取 top-N
+      2. BM25 稀疏检索 → 取 top-N
+      3. RRF 融合两路结果
+      4. Cross-Encoder 重排序（可选，精排）
+      5. 返回 top-K
+
+    Args:
+        query: 查询文本
+        top_k: 最终返回数量（默认 config.RAG_TOP_K）
+        owner_id: 多用户隔离
+        use_bm25: 是否启用 BM25 稀疏检索（默认 True）
+        use_reranker: 是否启用 Cross-Encoder 精排（默认 True）
+        rrf_top_n: 每路检索取 top-N 进行融合（默认 config.RRF_TOP_N）
+        bm25_weight: BM25 在 RRF 中的权重（0-1，默认 0.3）
+
+    Returns:
+        [{"id", "document", "metadata", "score", "rerank_score"?}, ...]
+    """
+    from src.embed.bm25 import BM25Index
+    from src.store import VectorStore
+
+    # 参数默认值从 config 读取
+    if use_bm25 is None:
+        use_bm25 = config.BM25_ENABLED
+    if use_reranker is None:
+        use_reranker = config.RERANKER_ENABLED
+    if bm25_weight is None:
+        bm25_weight = config.BM25_WEIGHT
+
+    embedder = get_embedder()
+    store = VectorStore()
+    where = {"owner_id": owner_id} if owner_id else None
+    k = top_k or config.RAG_TOP_K
+    n = rrf_top_n or config.RRF_TOP_N
+
+    if store.count() == 0:
+        return []
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  Step 1 & 2: 稠密 & 稀疏双路检索
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    rank_lists: Dict[str, List[Dict]] = {}
+
+    # 稠密检索（第一个 provider）
+    dense_backend = embedder._backends[embedder.providers[0]]
+    q_emb = dense_backend.embed([query])[0].tolist()
+    dense_result = store.query(q_emb, top_k=n, where=where)
+    rank_lists["dense"] = dense_result["hits"]
+    logger.debug("稠密检索: %d hits", len(rank_lists["dense"]))
+
+    # BM25 稀疏检索
+    if use_bm25:
+        try:
+            # 从 store 获取所有文档构建 BM25 索引
+            all_items = store.peek(limit=min(store.count(), 2000))
+            bm25 = BM25Index()
+            docs = []
+            ids = []
+            for item in all_items:
+                doc_text = item.get("document", "")
+                if doc_text and doc_text.strip():
+                    docs.append(doc_text)
+                    ids.append(item.get("id", ""))
+
+            if docs:
+                bm25.index(docs, ids)
+                bm25_hits = bm25.search(query, top_k=n)
+                # 将 BM25 分数归一化到 [0,1]
+                max_score = max((h["score"] for h in bm25_hits), default=1.0)
+                for h in bm25_hits:
+                    if max_score > 0:
+                        h["score"] = h["score"] / max_score * bm25_weight
+                    # 回填 document 文本
+                    h.setdefault("document", "")
+                    h.setdefault("metadata", h.get("metadata", {}))
+                rank_lists["bm25"] = bm25_hits
+                logger.debug("BM25 检索: %d hits", len(bm25_hits))
+        except Exception:
+            logger.warning("BM25 检索失败，回退到纯稠密检索", exc_info=True)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  Step 3: RRF 融合
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    rrf_k_param = config.RRF_K
+    rrf_scores: Dict[str, float] = {}
+    hit_map: Dict[str, Dict] = {}
+
+    for source, hits in rank_lists.items():
+        weight = bm25_weight if source == "bm25" else (1.0 - bm25_weight)
+        for rank, hit in enumerate(hits, 1):
+            hid = hit.get("id", f"unknown_{rank}")
+            rrf_scores[hid] = rrf_scores.get(hid, 0.0) + weight / (rrf_k_param + rank)
+            if hid not in hit_map:
+                hit_map[hid] = hit
+
+    # 按 RRF 得分降序 → 取 Top-N 作为精排候选
+    sorted_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:n]
+    fused_hits = [
+        {**hit_map[hid], "rrf_score": round(rrf_scores[hid], 6)}
+        for hid in sorted_ids
+    ]
+    logger.debug("RRF 融合后: %d 候选", len(fused_hits))
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  Step 4: Cross-Encoder 精排（可选）
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    if use_reranker and len(fused_hits) > k:
+        try:
+            from src.embed.reranker import get_reranker
+            reranker = get_reranker()
+            if reranker is not None:
+                fused_hits = reranker.rerank(query, fused_hits, top_k=k)
+                logger.debug("Cross-Encoder 精排后: %d", len(fused_hits))
+        except Exception:
+            logger.warning("Cross-Encoder 重排失败，使用 RRF 结果", exc_info=True)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  Step 5: 返回 top-K
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # 统一 score 字段
+    for h in fused_hits[:k]:
+        if "score" not in h:
+            h["score"] = h.get("rerank_score") or h.get("rrf_score") or h.get("distance")
+        # 保留 distance 字段（兼容旧代码）
+        if "distance" not in h and "score" in h:
+            h["distance"] = 1.0 / (1.0 + float(h["score"])) if h["score"] else 0.0
+
+    return fused_hits[:k]
+
+
 # ---------- 单例 ----------
 
 _embedder: Optional[Embedder] = None
@@ -367,4 +518,5 @@ __all__ = [
     "Embedder",
     "get_embedder",
     "rrf_rerank",
+    "hybrid_retrieve",
 ]
