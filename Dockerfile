@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 创建非 root 用户（固定 UID=1000 避免 volume 权限漂移）
 RUN groupadd -r -g 1000 paper && useradd -r -g paper -d /app -u 1000 paper
 
-# Python 依赖
+# Python 依赖 — 先安装 CPU 版 PyTorch 避免拉入 CUDA/nvidia 包（~3GB）
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.txt
 
