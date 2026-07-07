@@ -41,23 +41,60 @@ class AgentMemory:
         self._truncate_if_needed()
 
     def _truncate_if_needed(self) -> None:
-        """如果消息过多，删除最早的 tool 交互对。"""
-        # 简单策略：保留 system + user + 最近 8 条消息
+        """如果消息过多，安全删除最早的完整 assistant+tool 交互组。
+
+        必须保持 OpenAI API 要求的消息配对：
+        - 每条 role=tool 消息前面必须有对应的 assistant(tool_calls) 消息
+        - 截断时以完整交互组为单位删除，不留孤立的 tool 消息
+        """
         max_msgs = 20
         if len(self.messages) <= max_msgs:
             return
 
-        # 找到第一个 assistant+tool 交互对的位置（跳过 system 和 user）
-        keep_start = min(2, len(self.messages))  # 至少保留前 2 条
-        if len(self.messages) > max_msgs:
-            removed = len(self.messages) - max_msgs - keep_start + 4
-            if removed > 0:
-                logger.debug("AgentMemory: 截断 %d 条旧消息", removed)
-                # 保留开头 + 末尾
-                self.messages = (
-                    self.messages[:keep_start] +
-                    self.messages[keep_start + removed:]
+        keep_start = min(2, len(self.messages))  # 保留 system + user
+
+        # 从 keep_start 开始，找到完整的 assistant+tool 组并逐个移除
+        while len(self.messages) > max_msgs:
+            i = keep_start
+            found_group = False
+            while i < len(self.messages):
+                msg = self.messages[i]
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    # 找到这个 assistant 对应的所有 tool 消息
+                    tc_ids = {tc.get("id", "") for tc in msg["tool_calls"]}
+                    group_end = i + 1
+                    while group_end < len(self.messages) and tc_ids:
+                        next_msg = self.messages[group_end]
+                        if next_msg.get("role") == "tool":
+                            tid = next_msg.get("tool_call_id", "")
+                            tc_ids.discard(tid)
+                        group_end += 1
+                    # 安全移除整个 group
+                    group_size = group_end - i
+                    del self.messages[i:group_end]
+                    found_group = True
+                    logger.debug("AgentMemory: 移除 assistant+tool 组 (%d 条)", group_size)
+                    break
+                elif msg.get("role") == "assistant":
+                    # 无 tool_calls 的 assistant — 安全移除
+                    del self.messages[i]
+                    found_group = True
+                    logger.debug("AgentMemory: 移除单条 assistant 消息")
+                    break
+                elif msg.get("role") == "tool":
+                    # 孤立的 tool 消息（异常情况）— 移除
+                    del self.messages[i]
+                    found_group = True
+                    logger.debug("AgentMemory: 移除孤立 tool 消息")
+                    break
+                i += 1
+
+            if not found_group:
+                logger.warning(
+                    "AgentMemory: 无法安全截断，当前 %d 条 > 上限 %d 条",
+                    len(self.messages), max_msgs,
                 )
+                break
 
     def summarize_context(self) -> str:
         """将当前上下文压缩为简短摘要（给 LLM 的 context prompt）。"""

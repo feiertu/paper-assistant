@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Dict, Generator, List, Optional
 
 import config
@@ -172,25 +173,32 @@ class LLMClient:
                      self._qa_model, query, len(hits), temperature or "default")
         yield from self.chat_stream(messages, model=self._qa_model, temperature=temperature)
 
-    def summarize(self, text: str, lang: str = "zh", max_words: int = 200) -> str:
-        """单文档摘要（带缓存）。"""
+    def summarize(self, text: str, lang: str = "zh", max_words: int = 200,
+                  arxiv_id: str = "") -> str:
+        """单文档摘要（带缓存）。
+
+        缓存 key = arxiv_id + 全文 SHA-256，确保同一论文的相同内容一定命中缓存。
+        """
         from . import prompts
 
-        # ── 缓存 ──
+        # ── 缓存（基于 arxiv_id + 全文哈希，比 text[:200] 更可靠） ──
+        cache_key = None
         if self._cache:
-            cache_key = make_llm_key(text[:200], make_context_hash([text]), lang, "summary")
+            content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            identifier = arxiv_id or content_hash
+            cache_key = f"summary|{identifier}|{lang}|{max_words}|{content_hash}"
             cached = self._cache.get(cache_key)
             if cached is not None:
-                logger.info("LLM 缓存命中 (summary): text=%.60s", text)
+                logger.info("LLM 缓存命中 (summary): id=%s len=%d", identifier, len(text))
                 return cached
 
         template = prompts.SUMMARY_PROMPT_ZH if lang == "zh" else prompts.SUMMARY_PROMPT_EN
         user_prompt = template.format(text=text, max_words=max_words)
-        logger.info("LLM 调用 (summary): model=%s lang=%s text_len=%d",
-                     self._summary_model, lang, len(text))
+        logger.info("LLM 调用 (summary): model=%s lang=%s text_len=%d id=%s",
+                     self._summary_model, lang, len(text), arxiv_id or "N/A")
         result = self.chat([{"role": "user", "content": user_prompt}], model=self._summary_model)
 
-        if self._cache:
+        if self._cache and cache_key:
             self._cache.set(cache_key, result)
         return result
 

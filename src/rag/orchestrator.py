@@ -376,7 +376,7 @@ def summarize_paper(
             full_text = full_text[:max_chars] + "…"
 
         llm = get_llm()
-        return llm.summarize(full_text, lang=lang)
+        return llm.summarize(full_text, lang=lang, arxiv_id=arxiv_id)
     except Exception as e:
         return f"摘要生成失败: {e}"
 
@@ -460,6 +460,86 @@ def reset_store() -> Dict[str, Any]:
 # ──────────────────────────────────────────────
 #  论文推荐（§ 基于向量相似度）
 # ──────────────────────────────────────────────
+
+def analyze_all_papers(
+    query: str = "",
+    lang: str = "zh",
+    owner_id: str = "",
+) -> str:
+    """全局论文分析：获取所有入库论文的元数据，生成综合概览。
+
+    适用于"所有论文的主旨是什么"这类全局问题。
+    策略：收集所有入库论文的标题+摘要，一次性交给 LLM 总结规律。
+
+    Args:
+        query: 用户的具体问题（如"这些论文共同关注什么"）
+        lang: "zh" 或 "en"
+        owner_id: 多用户隔离
+
+    Returns:
+        分析结果文本
+    """
+    from src.llm import get_llm
+    from src.db import get_dao
+
+    paper_dao = get_dao("paper")
+    papers = paper_dao.find_all(limit=100, owner_id=owner_id)
+    if not papers:
+        return "⚠️ 论文库中暂无论文，请先导入数据。"
+
+    # 构建论文摘要列表
+    paper_summaries = []
+    for i, p in enumerate(papers, 1):
+        title = p.title or p.arxiv_id
+        abstract = (p.abstract or "")[:300]
+        authors = (p.authors or "未知")[:100]
+        published = p.published or "未知"
+        paper_summaries.append(
+            f"[{i}] {p.arxiv_id} | {title}\n"
+            f"    作者: {authors} | 日期: {published}\n"
+            f"    摘要: {abstract}"
+        )
+
+    context = "\n\n".join(paper_summaries)
+
+    if lang == "zh":
+        system_prompt = "你是学术论文分析助手，擅长从大量论文中提炼研究方向、主题和方法论趋势。"
+        default_query = "请总结这些论文共同关注的研究方向、主要方法和核心发现。用 3-5 个主题词概括，并列出每篇论文的核心贡献。"
+        actual_query = query or default_query
+        user_prompt = f"""以下是论文库中全部 {len(papers)} 篇论文的元数据：
+
+{context}
+
+用户问题：{actual_query}
+
+要求：
+1. 先提炼 3-5 个共同主题词
+2. 按主题分类讨论论文
+3. 总结整体研究趋势和方法论特点
+4. 严格基于提供的元数据，不编造"""
+    else:
+        system_prompt = "You are an academic paper analysis assistant, skilled at extracting research directions and methodology trends from large paper collections."
+        default_query = "Please summarize the research directions, main methods, and core findings these papers share. Use 3-5 theme keywords, and list each paper's core contribution."
+        actual_query = query or default_query
+        user_prompt = f"""Here are the metadata for all {len(papers)} papers in the library:
+
+{context}
+
+User question: {actual_query}
+
+Requirements:
+1. First extract 3-5 common theme keywords
+2. Categorize papers by theme
+3. Summarize overall research trends and methodology patterns
+4. Strictly based on provided metadata, no fabrication"""
+
+    llm = get_llm()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    return llm.chat(messages, model=config.LLM_QA_MODEL)
+
 
 def recommend_similar(
     arxiv_id: str,

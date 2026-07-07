@@ -31,6 +31,7 @@ import config
 from src.cache import get_cache_stats
 from src.db import get_dao
 from src.rag import (
+    analyze_all_papers,
     answer_rag_stream,
     get_store_stats,
     ingest_parsed_dir,
@@ -49,6 +50,40 @@ from ui.styles import CSS
 
 st.set_page_config(page_title="Paper Assistant", page_icon="👑", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════
+#  性能优化：缓存 DAO 和 Store 连接，减少 sidebar 导航延迟
+# ══════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner=False)
+def _cached_get_dao(name: str):
+    """缓存 DAO 实例，避免每次 rerun 重建。"""
+    return get_dao(name)
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_get_store():
+    """缓存 VectorStore 实例。"""
+    from src.store import get_store
+    return get_store()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_list_papers(owner_id: str):
+    """缓存论文列表（30 秒 TTL），减少重复查询。"""
+    return list_papers(owner_id=owner_id)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_store_stats():
+    """缓存向量库统计。"""
+    return get_store_stats()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_cache_stats():
+    """缓存缓存统计。"""
+    return get_cache_stats()
 
 # ══════════════════════════════════════════════════════════════
 #  Session State 初始化
@@ -500,6 +535,7 @@ page_key = st.session_state.nav_page
 
 if page_key == "qa":
     def render_qa():
+        owner_id = st.session_state.owner_id
         st.markdown("""
         <div class="hero-search">
             <h1>用 AI 读懂每一篇论文</h1>
@@ -517,7 +553,7 @@ if page_key == "qa":
             top_k = st.selectbox("精度", [3, 5, 10, 20], index=1,
                                  label_visibility="collapsed", key="qa_topk")
 
-        col_btn, col_lang, col_temp = st.columns([1, 2, 1])
+        col_btn, col_lang, col_temp, col_mode = st.columns([1, 1.5, 1, 1.5])
         with col_btn:
             ask = st.button("搜索回答", type="primary", use_container_width=True,
                            disabled=not query.strip())
@@ -529,31 +565,42 @@ if page_key == "qa":
             qa_temperature = st.slider("温度", 0.0, 1.5, 0.3, 0.1,
                                        label_visibility="collapsed", key="qa_temp",
                                        help="越低越严谨，越高越有创造性")
+        with col_mode:
+            global_mode = st.checkbox("全局分析模式", value=False, key="qa_global",
+                                       help="针对「所有论文的主旨」等全局问题，汇总全部论文元数据进行分析")
 
         if ask:
-            with st.status("检索相关知识…", expanded=False) as status:
-                result = retrieve(query, top_k=top_k)
-                hits = result.get("hits", [])
-                status.update(label=f"找到 {len(hits)} 个相关片段", state="complete")
+            if global_mode:
+                # ── 全局分析：汇总所有论文元数据 ──
+                with st.spinner("正在汇总所有论文数据…"):
+                    result = analyze_all_papers(query=query, lang=lang_qa, owner_id=owner_id)
+                st.markdown("### 全局分析结果")
+                st.markdown(result)
+            else:
+                # ── 普通 RAG 检索 ──
+                with st.status("检索相关知识…", expanded=False) as status:
+                    result = retrieve(query, top_k=top_k)
+                    hits = result.get("hits", [])
+                    status.update(label=f"找到 {len(hits)} 个相关片段", state="complete")
 
-            if hits:
-                with st.expander(f"引用论文片段（{len(hits)} 条）", expanded=False):
-                    for i, hit in enumerate(hits, 1):
-                        render_source_card(hit, i)
+                if hits:
+                    with st.expander(f"引用论文片段（{len(hits)} 条）", expanded=False):
+                        for i, hit in enumerate(hits, 1):
+                            render_source_card(hit, i)
 
-            st.markdown("### 回答")
-            answer_box = st.empty()
-            full = ""
-            for token in answer_rag_stream(query, top_k=top_k, lang=lang_qa, temperature=qa_temperature):
-                full += token
-                answer_box.markdown(f"""
-                <div class="chat-container">
-                    <div class="chat-bubble assistant">{full}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown("### 回答")
+                answer_box = st.empty()
+                full = ""
+                for token in answer_rag_stream(query, top_k=top_k, lang=lang_qa, temperature=qa_temperature):
+                    full += token
+                    answer_box.markdown(f"""
+                    <div class="chat-container">
+                        <div class="chat-bubble assistant">{full}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            if not full.strip():
-                st.warning("未找到相关信息。")
+                if not full.strip():
+                    st.warning("未找到相关信息。")
 
         if not ask:
             st.divider()
@@ -662,7 +709,7 @@ elif page_key == "library":
         dao = get_dao("paper")
 
         # ── 快速操作栏 ──
-        col_imp, _ = st.columns([1, 4])
+        col_imp, col_path, _ = st.columns([1.5, 2, 3])
         with col_imp:
             if st.button("导入本地论文", type="secondary", use_container_width=True,
                         help="扫描 parsed/ 目录下的 JSON 文件并向量化入库"):
@@ -673,6 +720,25 @@ elif page_key == "library":
                     else:
                         st.success(f"已导入 {result.get('papers', 0)} 篇，{result.get('chunks', 0)} 个片段")
                         st.rerun()
+        with col_path:
+            custom_dir = st.text_input(
+                "自定义解析目录", placeholder=f"留空={config.PARSED_DIR}",
+                label_visibility="collapsed", key="custom_parsed_dir",
+                help="输入包含 JSON 解析文件的目录路径，留空使用默认路径",
+            )
+            if custom_dir.strip():
+                import_dir = Path(custom_dir.strip())
+                if import_dir.exists() and import_dir.is_dir():
+                    if st.button("📂 从此目录导入", key="import_custom_dir", use_container_width=True):
+                        with st.spinner(f"从 {import_dir} 导入中..."):
+                            result = ingest_parsed_dir(parsed_dir=str(import_dir), owner_id=owner_id)
+                            if "error" in result:
+                                st.error(result["error"])
+                            else:
+                                st.success(f"已导入 {result.get('papers', 0)} 篇，{result.get('chunks', 0)} 个片段")
+                                st.rerun()
+                else:
+                    st.caption(f"⚠️ 目录不存在: {import_dir}")
 
         # ── arXiv 抓取 ──
         with st.expander("📥 从 arXiv 抓取论文", expanded=False):
@@ -717,6 +783,12 @@ elif page_key == "library":
                                     failed = s.get("failed", 0)
                                     extra = f", 失败 {failed} 篇" if failed else ""
                                     st.write(f"{label}: 成功 {s['success']} 篇{extra}")
+                                    if failed > 0:
+                                        st.warning(
+                                            f"⚠️ {failed} 篇 PDF 下载失败。"
+                                            f"可能原因：arXiv 限流、网络不稳定、PDF 地址失效。"
+                                            f"可稍后点击「处理」按钮重试下载。"
+                                        )
                                 elif s["step"] == "parse":
                                     st.write(f"{label}: {s['count']} 篇")
                                 elif s["step"] == "ingest":
@@ -724,9 +796,30 @@ elif page_key == "library":
                             st.success("管道完成！同名论文自动去重。")
                             st.rerun()
                         else:
-                            st.error(resp.json().get("detail", str(resp.status_code)))
+                            detail = resp.json().get("detail", str(resp.status_code))
+                            if "Connection" in str(detail) or "RemoteDisconnected" in str(detail):
+                                st.error(
+                                    f"arXiv 连接失败：{detail}\n\n"
+                                    "可能原因：\n"
+                                    "1. 服务器网络无法访问 arXiv API\n"
+                                    "2. arXiv 临时限流\n"
+                                    "3. DNS 解析异常\n\n"
+                                    "建议：稍后重试，或检查服务器网络 `curl http://export.arxiv.org/api/query`"
+                                )
+                            else:
+                                st.error(detail)
+                    except requests.exceptions.ConnectionError:
+                        st.error(
+                            "⚠️ 无法连接到本地 API 服务。请确保后端服务正在运行。\n"
+                            f"检查：`curl http://127.0.0.1:{config.API_PORT}/health`"
+                        )
+                    except requests.exceptions.Timeout:
+                        st.error(
+                            "⏱️ 请求超时（10分钟）。arXiv 下载可能因网络慢或论文太多导致。\n"
+                            "建议：减少抓取篇数（如 1-2 篇），或检查服务器网络速度。"
+                        )
                     except Exception as e:
-                        st.error(str(e))
+                        st.error(f"抓取失败: {e}")
 
             # 显示当前待处理数
             pending_count = len([p for p in dao.find_all(limit=200, owner_id=owner_id) if p.ingest_status == "pending"])
@@ -763,7 +856,7 @@ elif page_key == "library":
 
         total = dao.count(owner_id=owner_id)
 
-        col1, col2, col3 = st.columns([3, 2, 1])
+        col1, col2, col3, col4 = st.columns([2, 1.5, 1, 1])
         with col1:
             keyword = st.text_input("搜索论文", placeholder="标题 / 摘要 / 作者…", label_visibility="collapsed")
         with col2:
@@ -776,8 +869,10 @@ elif page_key == "library":
             sort_by = st.selectbox("排序", ["created_at", "title", "published"],
                                    format_func=lambda x: {"created_at": "入库", "title": "标题", "published": "日期"}[x],
                                    label_visibility="collapsed")
+        with col4:
+            limit = st.selectbox("每页", [10, 20, 50, 100], index=1, label_visibility="collapsed")
 
-        col_a2, col_b2, col_c2 = st.columns([3, 1, 1])
+        col_a2, col_b2, col_c2, col_d2 = st.columns([3, 1, 1, 1])
         with col_a2:
             author = st.text_input("作者", placeholder="模糊匹配", label_visibility="collapsed")
         with col_b2:
@@ -785,44 +880,103 @@ elif page_key == "library":
                                          format_func=lambda x: {"": "全部", "ingested": "入库", "pending": "待处理", "failed": "失败"}[x],
                                          label_visibility="collapsed")
         with col_c2:
-            limit = st.selectbox("条数", [20, 50, 100, 200], index=1, label_visibility="collapsed")
+            # 分页页码
+            total_pages = max(1, (total + limit - 1) // limit) if not (keyword or author or year_from or year_to or status_filter) else 1
+            page = st.number_input("页码", min_value=1, max_value=max(1, total_pages), value=1,
+                                   label_visibility="collapsed", key="paper_page")
+        with col_d2:
+            st.write("")  # spacer
 
-        if keyword or author or year_from or year_to or status_filter:
+        offset = (page - 1) * limit
+
+        has_filter = keyword or author or year_from or year_to or status_filter
+        if has_filter:
+            # 搜索时不限制 offset（搜索模式下不翻页，结果一般较少）
             papers = dao.search(
-                keyword=keyword, limit=limit, author=author,
+                keyword=keyword, limit=limit * 5, author=author,
                 year_from=year_from, year_to=year_to,
                 status=status_filter, sort_by=sort_by,
                 owner_id=owner_id,
             )
+            result_count = len(papers)
+            papers = papers[offset:offset + limit]
         else:
-            papers = dao.find_all(limit=limit, owner_id=owner_id)
+            papers = dao.find_all(limit=limit, offset=offset, owner_id=owner_id)
+            result_count = total
 
-        st.caption(f"共 {len(papers)} 条结果（全库 {total} 篇）")
+        st.caption(f"第 {page}/{max(1, total_pages)} 页，共 {result_count} 条结果（全库 {total} 篇）")
 
         if not papers:
             st.info("未找到匹配的论文。")
         else:
             for p in papers:
                 with st.container():
-                    render_paper_card(p)
+                    # ── 论文标题可点击展开，浏览分块/原文 ──
+                    with st.expander(f"📄 {p.title or p.arxiv_id} — {p.authors or '未知'}"):
+                        tab_chunks, tab_original, tab_meta = st.tabs(["分块内容", "原文", "元数据"])
 
-        st.divider()
-        st.subheader("快速预览")
-        arxiv_lookup = st.text_input("输入 arXiv ID 预览 PDF", placeholder="例如 2606.13673v1",
-                                     label_visibility="collapsed")
-        if arxiv_lookup.strip():
-            pdf_path = config.RAW_PDF_DIR / f"{arxiv_lookup.strip()}.pdf"
-            if pdf_path.exists():
-                with open(pdf_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                st.markdown(f"""
-                <iframe src="data:application/pdf;base64,{b64}"
-                        width="100%" height="700px"
-                        style="border:1px solid var(--hairline); border-radius:12px;">
-                </iframe>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning(f"PDF 不存在: {pdf_path}")
+                        with tab_chunks:
+                            from src.store import get_store
+                            store = get_store()
+                            try:
+                                chunks = store.peek(limit=500)
+                                paper_chunks = [
+                                    c for c in chunks
+                                    if (c.get("metadata") or {}).get("arxiv_id") == p.arxiv_id
+                                ]
+                                if paper_chunks:
+                                    for ci, chunk in enumerate(paper_chunks[:20], 1):
+                                        meta = chunk.get("metadata") or {}
+                                        section = meta.get("section_title", "")
+                                        page_num = meta.get("page", "")
+                                        doc_text = (chunk.get("document") or "")[:600]
+                                        st.caption(f"**Chunk {ci}** | {section} | p.{page_num}")
+                                        st.text(doc_text)
+                                        st.divider()
+                                    if len(paper_chunks) > 20:
+                                        st.caption(f"… 仅显示前 20 个分块（共 {len(paper_chunks)} 个）")
+                                else:
+                                    st.info("暂无分块数据，请先入库。")
+                            except Exception as e:
+                                st.warning(f"无法加载分块: {e}")
+
+                        with tab_original:
+                            json_path = config.PARSED_DIR / f"{p.arxiv_id}.json"
+                            if json_path.exists():
+                                try:
+                                    data = json.loads(json_path.read_text(encoding="utf-8"))
+                                    sections = data.get("sections", [])
+                                    for sec in sections:
+                                        title = sec.get("title", "Untitled")
+                                        content = sec.get("content", "")
+                                        with st.expander(f"📑 {title}", expanded=False):
+                                            st.text(content[:2000] if len(content) > 2000 else content)
+                                            if len(content) > 2000:
+                                                st.caption(f"… 内容过长，仅显示前 2000 字符（共 {len(content)} 字符）")
+                                            for sub in sec.get("subsections", []):
+                                                sub_title = sub.get("title", "")
+                                                sub_content = sub.get("content", "")
+                                                st.caption(f"**{sub_title}**")
+                                                st.text(sub_content[:1000] if len(sub_content) > 1000 else sub_content)
+                                                if len(sub_content) > 1000:
+                                                    st.caption("… (截断)")
+                                except Exception as e:
+                                    st.warning(f"无法解析原文: {e}")
+                            else:
+                                st.info(f"解析文件不存在: {json_path}")
+
+                        with tab_meta:
+                            st.json({
+                                "arxiv_id": p.arxiv_id,
+                                "title": p.title,
+                                "authors": p.authors,
+                                "abstract": p.abstract,
+                                "published": p.published,
+                                "source": p.source,
+                                "status": p.ingest_status,
+                                "chunks": p.chunk_count,
+                                "pdf_url": p.pdf_url,
+                            })
 
     render_library()
 
@@ -853,11 +1007,10 @@ elif page_key == "summary":
                 if st.button("生成摘要", type="primary", key="sum_btn"):
                     with st.spinner("分析中…"):
                         result = summarize_paper(paper_opts[sel], lang=lang_s)
-                    st.markdown(f"""
-                    <div class="chat-container">
-                        <div class="chat-bubble assistant">{result}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # 使用 st.markdown 渲染 Markdown 格式，去除 * 标记显示
+                    import re as _re
+                    clean_result = _re.sub(r'^\s*\*\s*', '- ', result, flags=_re.MULTILINE)
+                    st.markdown(clean_result)
 
         with tab_sur:
             st.subheader("多论文主题综述")
@@ -872,11 +1025,10 @@ elif page_key == "summary":
             if st.button("生成综述", type="primary", disabled=not topic.strip(), key="sur_btn"):
                 with st.spinner("检索文献并生成综述…"):
                     result = survey(topic, top_k=top_k_s, lang=lang_sv)
-                st.markdown(f"""
-                <div class="chat-container">
-                    <div class="chat-bubble assistant">{result}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                # 使用 st.markdown 渲染 Markdown，去除 * 标记显示
+                import re as _re
+                clean_result = _re.sub(r'^\s*\*\s*', '- ', result, flags=_re.MULTILINE)
+                st.markdown(clean_result)
 
         with tab_rec:
             st.subheader("基于向量相似度推荐相似论文")
@@ -1133,10 +1285,31 @@ elif page_key == "system":
             with col_sb:
                 st.subheader("缓存")
                 cs = get_cache_stats()
-                st.metric("LLM 命中率", f"{cs['llm']['hit_rate']*100:.1f}%")
-                st.caption(f"hits: {cs['llm']['hits']} / misses: {cs['llm']['misses']}")
-                st.metric("Embed 命中率", f"{cs['embed']['hit_rate']*100:.1f}%")
-                st.caption(f"hits: {cs['embed']['hits']} / misses: {cs['embed']['misses']}")
+                llm_s = cs.get("llm", {})
+                embed_s = cs.get("embed", {})
+
+                col_l1, col_l2 = st.columns(2)
+                with col_l1:
+                    st.metric("LLM 命中率", llm_s.get("hit_rate_pct", f"{llm_s.get('hit_rate', 0)*100:.1f}%"))
+                with col_l2:
+                    st.metric("Embed 命中率", embed_s.get("hit_rate_pct", f"{embed_s.get('hit_rate', 0)*100:.1f}%"))
+
+                st.caption(f"LLM — hits: {llm_s.get('hits', 0)} / misses: {llm_s.get('misses', 0)} "
+                           f"| 估算节省: {llm_s.get('estimated_tokens_saved', 0):,} tokens "
+                           f"| 效率: {llm_s.get('efficiency', 'N/A')}")
+                st.caption(f"Embed — hits: {embed_s.get('hits', 0)} / misses: {embed_s.get('misses', 0)} "
+                           f"| 缓存数: {embed_s.get('size', 0)} / {embed_s.get('maxsize', 0)}")
+
+                # 汇总评估数字
+                total_requests = llm_s.get('total_requests', 0) + embed_s.get('total_requests', 0)
+                total_saved = llm_s.get('estimated_tokens_saved', 0)
+                if total_requests > 0:
+                    st.metric("总请求数", total_requests)
+                    st.metric("估算 Token 节省", f"{total_saved:,}")
+                    # 按 $0.002/1K tokens (GPT-4o-mini) 粗略估算成本节省
+                    est_cost_saved = total_saved / 1000 * 0.002
+                    st.caption(f"💡 估算成本节省: ${est_cost_saved:.4f} (按 GPT-4o-mini 定价)")
+
                 if st.button("清空缓存", type="secondary"):
                     from src.cache import get_llm_cache, get_embed_cache
                     get_llm_cache().clear()
@@ -1250,16 +1423,24 @@ elif page_key == "help":
             如果你看到标题/摘要是中文的，那是原作者自己写的中文 —— arXiv 上确实有一些中文论文，特别是国内学者投稿的。
             """)
 
-        with st.expander("智能问答 vs 智能分析"):
+        with st.expander("智能问答 vs 智能分析 — 何时用哪个？"):
             st.markdown("""
             | | 智能问答 | 智能分析 (Agent) |
             |--|---------|-----------------|
-            | 怎么工作 | 搜相关片段 → 一次性回答 | AI 自己决定用哪些工具，分步执行 |
-            | 能做什么 | 针对已有论文提问 | 搜索、摘要、对比、推荐、综述等 |
-            | 速度 | 快（一次调用） | 慢（可能调用多次） |
-            | 适合 | 查具体问题 | 综合研究任务 |
+            | 怎么工作 | 向量检索 → 一次性回答 | AI 自主调用工具，分步执行 |
+            | 全局分析 | ✅ 支持（勾选"全局分析模式"） | ❌ 不适合（步数限制） |
+            | 具体问题 | ✅ 最佳选择 | ✅ 也可以 |
+            | 综合研究 | ⚠️ 受检索片段限制 | ✅ 最佳选择 |
+            | 速度 | 快（1次 LLM 调用） | 慢（5-20 次 LLM 调用） |
+            | Token 消耗 | 低 | 高 |
 
-            **简单说：** 问"这篇论文用了什么方法"用问答；说"帮我梳理这个方向的技术路线"用智能分析。
+            **选择指南：**
+            - 问「所有论文的主旨是什么」→ 智能问答 + ✅ 全局分析模式
+            - 问「这篇论文的贡献」→ 智能问答
+            - 说「帮我梳理 VLM 的技术路线」→ 智能分析
+
+            **全局分析模式** 会汇总全部论文的标题和摘要交给 AI 分析，适合宏观了解论文库。
+            与智能分析的区别：全局分析走一次性汇总（快），智能分析走 Agent 多步推理（深）。
             """)
 
         with st.expander("温度 (Temperature) 是什么？"):
@@ -1273,6 +1454,37 @@ elif page_key == "help":
             默认值是 0.3（问答）和 0.1（智能分析），对学术用途来说偏低是合理的。
             """)
 
+        with st.expander("论文库浏览与分页"):
+            st.markdown("""
+            **点击论文标题** 即可展开查看：
+            - **分块内容**：向量化入库后的文本片段（chunks），展示每段的章节来源和页码
+            - **原文**：解析后的结构化原文，按章节展示
+            - **元数据**：arXiv ID、标题、作者、摘要等信息
+
+            **分页功能**：论文超过一页时可翻页浏览（10/20/50/100 每页可选）。
+
+            **搜索**：支持按关键词（全文搜索）、作者、年份范围、入库状态筛选。
+
+            **导入本地论文**：可以指定自定义解析目录（JSON 文件目录），不局限于默认的 `data/parsed/`。
+            """)
+
+        with st.expander("缓存机制与 Token 节省"):
+            st.markdown("""
+            **两层缓存：**
+
+            | 缓存层 | TTL | 容量 | 命中条件 |
+            |--------|-----|------|----------|
+            | LLM 缓存 | 30 分钟 | 200 条 | 相同的 query + context + lang + task |
+            | Embedding 缓存 | 24 小时 | 2000 条 | 相同的文本 + provider |
+
+            **摘要缓存优化：** 同一篇论文反复生成摘要时，基于论文 ID + 全文哈希做缓存 key，确保相同内容 100% 命中缓存，大幅减少 token 消耗。
+
+            **缓存统计查看：** 系统设置 → 状态 → 缓存，可看到命中率、估算 Token 节省、成本估算。
+            估算成本按 GPT-4o-mini 定价（$0.002/1K tokens）计算，仅作参考。
+
+            **清空缓存：** 进入系统设置点击「清空缓存」即可重置所有缓存统计数据。
+            """)
+
         with st.expander("代码块、数学公式等特殊内容"):
             st.markdown("""
             当前系统对论文正文做**纯文本处理**，对特殊内容有限制：
@@ -1281,7 +1493,7 @@ elif page_key == "help":
             |---------|---------|
             | 普通段落文字 | 正常分块、检索、问答 |
             | 数学公式 (LaTeX) | 作为纯文本保留，可能被截断 |
-            | 代码块 | 作为纯文本保留 |
+            | 代码块 | 分块时保护不被裁断 |
             | 表格 | GROBID 引擎可提取为 Markdown，但暂未加入检索 |
             | 图片/图表 | 仅提取标题，图片内容不处理 |
             | 多栏排版 | 按文档顺序读取，可能打乱阅读顺序 |
@@ -1293,13 +1505,13 @@ elif page_key == "help":
             st.markdown("""
             | 页面 | 一句话说明 |
             |------|-----------|
-            | 智能问答 | 对已有论文提问，AI 从论文里找答案 |
-            | 智能分析 | AI 自主使用多种工具完成复杂任务 |
-            | 论文库 | 搜索 arXiv、管理论文、查看 PDF |
+            | 智能问答 | 对已有论文提问（支持全局分析模式分析全部论文主旨） |
+            | 智能分析 | AI 自主使用 7 种工具完成复杂研究任务 |
+            | 论文库 | 搜索 arXiv、管理论文、点击标题浏览分块/原文 |
             | 摘要 & 综述 | 生成单篇摘要、多篇综述、找相似论文 |
             | 引用关系 | 查看论文之间的引用网络 |
             | 数据管理 | 入库、导出、备份数据 |
-            | 系统设置 | 查看状态、清缓存、备份恢复 |
+            | 系统设置 | 查看状态、清缓存、备份恢复、成本估算 |
             """)
 
         with st.expander("常见问题"):
@@ -1308,22 +1520,37 @@ elif page_key == "help":
             A: 论文还没入库。在论文库点击"处理"按钮，系统会自动下载 PDF → 解析 → 向量化。
 
             **Q: 怎么看不到我刚抓的论文？**
-            A: 检查页面搜索框是否清空，或确认论文状态是"已入库"而非"待处理"。
+            A: 检查页面搜索框是否清空，或确认论文状态是"已入库"而非"待处理"。可用分页翻页查找。
 
             **Q: 问答说"向量库为空"？**
             A: 没有论文入库过。先去论文库抓论文并点击"处理"，或去数据管理页面执行"入库"。
 
-            **Q: PDF 预览打不开？**
-            A: PDF 还没下载。点击论文库的"处理"按钮下载。
+            **Q: 问"所有论文的主旨"答不上来？**
+            A: 勾选智能问答页面的 **「全局分析模式」** 复选框，系统会汇总全部论文的标题+摘要做分析。
 
-            **Q: Agent 回答不完整？**
-            A: 可能是 API 超时或步数不够。增加步数滑块值，或缩短问题的复杂度。
+            **Q: Agent 回答不完整或报错？**
+            A: 可能是步数不够或上下文超限。增加步数滑块值（建议 15-20），或缩短问题复杂度。
+            如遇到 "Messages with role 'tool'" 错误，刷新页面重试即可（已修复上下文截断 bug）。
+
+            **Q: 摘要结果有 * 标记不好看？**
+            A: 已修复。摘要现在使用 Markdown 渲染，`*` 会正常显示为列表项。
+
+            **Q: 同一篇论文反复摘要消耗太多 token？**
+            A: 已优化。同一论文+相同内容第二次生成摘要时，会直接命中缓存，不再调用 LLM。
+            可在系统设置查看缓存命中率和估算节省。
 
             **Q: 多个用户的数据会混在一起吗？**
             A: 不会。每个用户的数据通过 owner_id 隔离，互不可见。
 
             **Q: 会不会重复搜索已入库的论文？**
             A: 不会。系统自动跳过已入库论文（状态为"已入库"），只抓取新论文。待处理/失败的论文仍会重试。
+
+            **Q: arXiv 抓取失败怎么办？**
+            A: arXiv API 可能限流或网络不稳定。系统已内置断点续传和指数退避重试。可等待几分钟后重试。
+            如持续失败，检查服务器网络：`curl -I http://export.arxiv.org/api/query`。
+
+            **Q: 左侧导航切换慢？**
+            A: Streamlit 的限制，每次切换会刷新整个页面。已优化缓存策略以加快加载速度。
             """)
 
     render_help()

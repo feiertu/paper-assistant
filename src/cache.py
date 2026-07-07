@@ -95,12 +95,20 @@ class TTLCache:
     def stats(self) -> Dict[str, Any]:
         with self._lock:
             total = self._hits + self._misses
+            hit_rate = round(self._hits / max(total, 1), 3)
+            # 估算 token 节省（假设每次缓存命中节省约 200 tokens）
+            estimated_tokens_saved = self._hits * 200
             return {
                 "size": len(self._store),
                 "maxsize": self._maxsize,
                 "hits": self._hits,
                 "misses": self._misses,
-                "hit_rate": round(self._hits / max(total, 1), 3),
+                "total_requests": total,
+                "hit_rate": hit_rate,
+                "hit_rate_pct": f"{hit_rate * 100:.1f}%",
+                "estimated_tokens_saved": estimated_tokens_saved,
+                "ttl_seconds": self._ttl,
+                "efficiency": "高" if hit_rate > 0.5 else ("中" if hit_rate > 0.2 else "低"),
             }
 
 
