@@ -6,10 +6,10 @@ services:
     container_name: paper-assistant
     expose:
       - "8000"
-      - "8501"
     volumes:
       - paper_data:/app/data
       - paper_logs:/app/logs
+      - paper_static:/app/static
       - certbot_www:/var/www/certbot:ro
     env_file:
       - .env
@@ -18,7 +18,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 2G
+          memory: 3G
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -36,6 +36,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      - paper_static:/usr/share/nginx/html:ro
       - ./nginx/paper-assistant.conf:/etc/nginx/conf.d/default.conf:ro
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
@@ -45,8 +46,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Certbot 用于自动申请/续期 Let's Encrypt 证书
-  # 首次运行: docker compose run --rm certbot certonly --webroot ...
+  # Certbot — Let's Encrypt 证书自动续期
   certbot:
     image: certbot/certbot:latest
     container_name: paper-certbot
@@ -64,6 +64,8 @@ volumes:
   paper_data:
     driver: local
   paper_logs:
+    driver: local
+  paper_static:
     driver: local
   certbot_certs:
     driver: local
