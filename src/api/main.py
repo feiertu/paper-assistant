@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
+import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -74,7 +77,7 @@ def _validate_config_on_startup() -> None:
             and config.LLM_MODEL not in ("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo")
             and not config.LLM_MODEL.startswith("gpt-")):
         logger.warning(
-            "⚠️  LLM_MODEL=%s 但 OPENAI_BASE_URL 未设置，"
+            "  LLM_MODEL=%s 但 OPENAI_BASE_URL 未设置，"
             "将使用 OpenAI 默认地址 https://api.openai.com/v1，可能不兼容。"
             "如果是国产模型，请在 .env 中设置 OPENAI_BASE_URL",
             config.LLM_MODEL,
@@ -114,7 +117,7 @@ async def body_size_limit_middleware(request: Request, call_next):
 cors_origins = [o.strip() for o in config.API_CORS_ORIGINS.split(",") if o.strip()]
 if not cors_origins:
     logger.warning(
-        "⚠️  CORS origins 未设置！API 将拒绝所有跨域请求。"
+        "  CORS origins 未设置！API 将拒绝所有跨域请求。"
         " 生产环境请在 .env 中设置 API_CORS_ORIGINS=你的域名"
     )
 app.add_middleware(
@@ -166,6 +169,7 @@ class RAGQueryRequest(BaseModel):
     query: str
     top_k: int = Field(default=config.RAG_TOP_K, ge=1, le=50)
     lang: str = "zh"
+    temperature: Optional[float] = None
 
 
 class SummarizeRequest(BaseModel):
@@ -181,11 +185,104 @@ class SurveyRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     reset: bool = False
+    parsed_dir: str = ""  # 自定义解析目录，留空使用默认
 
 
 class IngestTextRequest(BaseModel):
     text: str
     metadata: Optional[Dict[str, Any]] = None
+
+
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+    mode: str = "login"  # "login" | "register"
+    confirm: str = ""    # register only
+
+
+# ── 用户认证辅助 ──
+
+_USERS_FILE = config.DATA_DIR / "users.json"
+_RATE_FILE = config.DATA_DIR / "reg_rate_limit.json"
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,20}$")
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿぀-ゟ゠-ヿ가-힯]")
+
+
+def _hash_pw(password: str, salt: str | None = None) -> tuple[str, str]:
+    """SHA-256(password + salt)，与前端一致。"""
+    if salt is None:
+        salt = hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:16]
+    h = hashlib.sha256((password + salt).encode()).hexdigest()
+    return h, salt
+
+
+def _load_users() -> dict[str, dict]:
+    if _USERS_FILE.exists():
+        try:
+            return json.loads(_USERS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    # 首次启动：创建 demo 账号
+    h, s = _hash_pw("demo123")
+    users = {"demo": {"hash": h, "salt": s, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")}}
+    _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+    return users
+
+
+def _save_users(users: dict) -> None:
+    _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ── Auth Endpoints ──
+
+@app.post("/auth/login")
+def auth_login(req: AuthRequest):
+    """登录：验证用户名密码。"""
+    users = _load_users()
+    entry = users.get(req.username.strip())
+    if entry and isinstance(entry, dict):
+        h, _ = _hash_pw(req.password, entry.get("salt", ""))
+        if h == entry.get("hash", ""):
+            return {"status": "ok", "username": req.username.strip()}
+    raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+
+@app.post("/auth/register")
+def auth_register(req: AuthRequest):
+    """注册新用户。"""
+    username = req.username.strip()
+
+    # 校验用户名
+    if not username or not _USERNAME_RE.match(username):
+        raise HTTPException(status_code=400, detail="用户名需 3-20 位，只能包含英文字母、数字和下划线")
+
+    # 校验密码
+    pw = req.password
+    if len(pw) < 8:
+        raise HTTPException(status_code=400, detail="密码至少需要 8 个字符")
+    if not re.search(r"[a-zA-Z]", pw):
+        raise HTTPException(status_code=400, detail="密码必须包含至少一个英文字母")
+    if not re.search(r"\d", pw):
+        raise HTTPException(status_code=400, detail="密码必须包含至少一个数字")
+    if _CJK_RE.search(pw):
+        raise HTTPException(status_code=400, detail="密码不能包含中文/日文/韩文字符")
+    if req.confirm and pw != req.confirm:
+        raise HTTPException(status_code=400, detail="两次密码不一致")
+
+    users = _load_users()
+    if username in users:
+        raise HTTPException(status_code=409, detail="用户名已存在")
+
+    h, s = _hash_pw(pw)
+    users[username] = {
+        "hash": h,
+        "salt": s,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_users(users)
+    return {"status": "ok", "username": username}
 
 
 # ── 健康检查 ──
@@ -250,14 +347,15 @@ def get_config():
 # ── 检索 ──
 
 @app.post("/retrieve")
-def retrieve_route(req: RetrieveRequest):
-    return retrieve(req.query, top_k=req.top_k)
+def retrieve_route(req: RetrieveRequest, request: Request = None):
+    owner_id = get_owner_id(request) if request else ""
+    return retrieve(req.query, top_k=req.top_k, owner_id=owner_id)
 
 
 # ── RAG 问答 ──
 
 @app.post("/rag/query")
-def rag_query(req: RAGQueryRequest):
+def rag_query(req: RAGQueryRequest, request: Request = None):
     answer = answer_rag(req.query, top_k=req.top_k, lang=req.lang)
     return {"answer": answer}
 
@@ -265,7 +363,7 @@ def rag_query(req: RAGQueryRequest):
 @app.post("/rag/query/stream")
 def rag_query_stream(req: RAGQueryRequest):
     def _gen():
-        for token in answer_rag_stream(req.query, top_k=req.top_k, lang=req.lang):
+        for token in answer_rag_stream(req.query, top_k=req.top_k, lang=req.lang, temperature=req.temperature):
             yield f"data: {token}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -346,8 +444,13 @@ def survey_route(req: SurveyRequest):
 # ── 数据入库 ──
 
 @app.post("/ingest")
-def ingest_route(req: IngestRequest):
-    result = ingest_parsed_dir(reset=req.reset)
+def ingest_route(req: IngestRequest, request: Request = None):
+    owner_id = get_owner_id(request) if request else ""
+    result = ingest_parsed_dir(
+        parsed_dir=req.parsed_dir or None,
+        reset=req.reset,
+        owner_id=owner_id,
+    )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -574,8 +677,9 @@ def store_stats():
 
 
 @app.get("/store/papers")
-def store_papers():
-    return list_papers()
+def store_papers(request: Request = None):
+    owner_id = get_owner_id(request) if request else ""
+    return list_papers(owner_id=owner_id)
 
 
 @app.delete("/store/reset")
@@ -589,10 +693,11 @@ def store_reset():
 # ── 论文元数据 ──
 
 @app.get("/papers")
-def papers_list(limit: int = 50, offset: int = 0):
+def papers_list(limit: int = 50, offset: int = 0, request: Request = None):
     dao = get_dao("paper")
-    papers = dao.find_all(limit=limit, offset=offset)
-    return {"papers": [p.to_dict() for p in papers], "total": dao.count()}
+    owner_id = get_owner_id(request) if request else ""
+    papers = dao.find_all(limit=limit, offset=offset, owner_id=owner_id)
+    return {"papers": [p.to_dict() for p in papers], "total": dao.count(owner_id=owner_id)}
 
 
 @app.get("/papers/{arxiv_id}")
@@ -615,13 +720,15 @@ def papers_search(
     status: str = Query("", description="入库状态: pending/ingested/failed"),
     sort_by: str = Query("created_at", description="排序: created_at/title/published"),
     limit: int = Query(50, ge=1, le=500),
+    request: Request = None,
 ):
-    """全文搜索 + 多条件过滤。"""
+    """全文搜索 + 多条件过滤（按 owner 隔离）。"""
     dao = get_dao("paper")
+    owner_id = get_owner_id(request) if request else ""
     results = dao.search(
         keyword=keyword, limit=limit, arxiv_id=arxiv_id, author=author,
         year_from=year_from, year_to=year_to, source=source, status=status,
-        sort_by=sort_by,
+        sort_by=sort_by, owner_id=owner_id,
     )
     return {"papers": [p.to_dict() for p in results], "total": len(results)}
 
@@ -793,6 +900,45 @@ def papers_recommend(req: RecommendRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── 论文全局分析 ──
+
+class AnalyzeRequest(BaseModel):
+    query: str = ""
+    lang: str = "zh"
+
+
+@app.post("/papers/analyze")
+def papers_analyze(req: AnalyzeRequest, request: Request = None):
+    """全局论文分析：汇总所有入库论文的元数据，生成综合概览。"""
+    from src.rag import analyze_all_papers
+    owner_id = get_owner_id(request) if request else ""
+    result = analyze_all_papers(query=req.query, lang=req.lang, owner_id=owner_id)
+    return {"analysis": result}
+
+
+# ── 论文分块内容查询 ──
+
+@app.get("/papers/{arxiv_id}/chunks")
+def papers_chunks(arxiv_id: str, limit: int = Query(500, ge=1, le=1000)):
+    """获取指定论文在向量库中的分块内容。"""
+    import re
+    if not re.match(r'^[\w.-]+$', arxiv_id) or '..' in arxiv_id:
+        raise HTTPException(status_code=400, detail=f"无效的 arxiv_id: {arxiv_id}")
+    from src.store import get_store
+    store = get_store()
+    try:
+        paper_chunks = [
+            {
+                "document": c.get("document", "")[:600],
+                "metadata": c.get("metadata", {}),
+            }
+            for c in store.get_by_arxiv_id(arxiv_id, limit=limit)
+        ]
+        return {"arxiv_id": arxiv_id, "chunks": paper_chunks, "total": len(paper_chunks)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── 数据导出 ──
 
 @app.get("/export/papers")
@@ -892,6 +1038,33 @@ def papers_language(arxiv_id: str):
         data = json.loads(json_path.read_text(encoding="utf-8"))
         from src.parse.language import detect_json_language
         return detect_json_language(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/papers/{arxiv_id}/content")
+def papers_content(arxiv_id: str):
+    """获取论文解析后的结构化内容（sections/subsections）。"""
+    json_path = config.PARSED_DIR / f"{arxiv_id}.json"
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail=f"未找到解析文件: {arxiv_id}")
+
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        sections = data.get("sections", [])
+        # 只返回内容，不返回 metadata（减小响应体积）
+        result = []
+        for sec in sections:
+            item = {
+                "title": sec.get("title", "Untitled"),
+                "content": sec.get("content", ""),
+                "subsections": [
+                    {"title": sub.get("title", ""), "content": sub.get("content", "")}
+                    for sub in sec.get("subsections", [])
+                ],
+            }
+            result.append(item)
+        return {"sections": result, "total": len(result)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

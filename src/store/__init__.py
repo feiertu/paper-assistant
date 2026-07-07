@@ -153,6 +153,24 @@ class VectorStore:
             )
         return out
 
+    def get_by_arxiv_id(self, arxiv_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+        """按 arxiv_id 过滤查询分块，使用 ChromaDB 元数据过滤。"""
+        data = self._collection.get(
+            where={"arxiv_id": arxiv_id},
+            limit=limit,
+            include=["documents", "metadatas"],
+        )
+        out: List[Dict[str, Any]] = []
+        for i, _id in enumerate(data.get("ids", [])):
+            out.append(
+                {
+                    "id": _id,
+                    "document": (data.get("documents") or [""])[i],
+                    "metadata": (data.get("metadatas") or [{}])[i],
+                }
+            )
+        return out
+
 
 # 模块级单例（懒加载），上层可选择直接 `from src.store import store`
 _store: Optional[VectorStore] = None
