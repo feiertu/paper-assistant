@@ -2,7 +2,7 @@
 
 特性：
 - API Key 鉴权（可选，通过 API_AUTH_ENABLED 控制）
-- 简单的滑动窗口限流
+- 简单的滑动窗口限流（支持反向代理 X-Forwarded-For）
 - 健康检查 /health 和 /config 端点不受鉴权限制
 """
 
@@ -26,10 +26,32 @@ _RATE_LIMIT_WHITELIST = {"/health", "/config", "/api/docs", "/api/redoc", "/api/
 _AUTH_WHITELIST = {"/health", "/config", "/api/docs", "/api/redoc", "/api/openapi.json"}
 
 
+def _get_real_ip(request: Request) -> str:
+    """获取真实客户端 IP，优先读取反向代理头。
+
+    优先级: X-Forwarded-For（取第一个） > X-Real-IP > 直连 IP
+    """
+    # X-Forwarded-For: "client, proxy1, proxy2" — 取第一个（原始客户端）
+    xff = request.headers.get("X-Forwarded-For", "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+
+    # X-Real-IP: nginx 设置的单一 IP
+    xri = request.headers.get("X-Real-IP", "").strip()
+    if xri:
+        return xri
+
+    # 直连（本地开发、健康检查等）
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """简单滑动窗口限流。
 
-    按客户端 IP 做全局限流，默认 30 req/min。
+    按真实客户端 IP（X-Forwarded-For）做全局限流，默认 30 req/min。
+    兼容反向代理（nginx）部署场景。
     """
 
     def __init__(self, app, max_requests: int = 30, window_seconds: int = 60):
@@ -45,7 +67,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path in _RATE_LIMIT_WHITELIST:
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_real_ip(request)
         now = time.time()
 
         # 清理过期记录
@@ -100,7 +122,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         client_key = request.headers.get("X-API-Key", "")
         if client_key != self._api_key:
             logger.warning("鉴权失败: ip=%s path=%s",
-                           request.client.host if request.client else "?",
+                           _get_real_ip(request),
                            request.url.path)
             return JSONResponse(
                 status_code=401,
