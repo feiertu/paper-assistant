@@ -12,19 +12,69 @@
 ## 架构概览
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Vue 3 前端   │────▶│  Nginx HTTPS │────▶│  FastAPI      │
-│  (SPA, :5173) │     │  (:80/:443)  │     │  API (:8000)  │
-└──────────────┘     └──────────────┘     └──────┬───────┘
-                                                 │
-        ┌────────────────────────────────────────┼────────────────────────────┐
-        │                                        │                            │
-        ▼                                        ▼                            ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  arXiv API   │   │   ChromaDB   │   │   SQLite     │   │  LLM API     │
-│  (元数据+PDF) │   │  (向量存储)   │   │  (元数据/历史)│   │  (OpenAI兼容) │
-└──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
+┌──────────────┐     ┌──────────────┐
+│  Vue 3 前端   │────▶│  FastAPI      │
+│  (:5173)      │     │  API (:8000)  │
+└──────────────┘     └──────┬───────┘
+                             │
+    ┌────────────────────────┼────────────────────────┐
+    │                        │                        │
+    ▼                        ▼                        ▼
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+│ arXiv API│   │ ChromaDB │   │  SQLite  │   │ LLM API  │
+│(元数据+PDF)│   │ (向量存储) │   │(元数据/历史)│   │(OpenAI兼容)│
+└──────────┘   └──────────┘   └──────────┘   └──────────┘
 ```
+
+## 快速开始
+
+### 环境要求
+- Python 3.11+
+- Node.js 20+（前端构建）
+
+### 1. 后端
+
+```bash
+# 安装依赖
+pip install -r requirements.lock
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env，至少填入 OPENAI_API_KEY
+
+# 抓取论文
+python src/fetch/arxiv.py
+python src/fetch/download_pdf.py
+
+# 解析 PDF（三选一）
+python src/parse/pdf.py              # PyMuPDF 快速解析
+python src/parse/docling_parser.py    # Docling Markdown 解析（推荐）
+# python src/parse/grob.py            # GROBID 精确解析（需 Docker 运行 grobid）
+
+# 启动 API 服务
+uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+### 2. 前端
+
+```bash
+cd frontend
+
+# 安装依赖
+npm install
+
+# 开发模式（:5173，自动代理 /api → :8000）
+npm run dev
+
+# 生产构建
+npm run build
+# 产物在 frontend/dist/，由 FastAPI 静态服务
+```
+
+### 3. 访问
+- 前端开发：`http://localhost:5173`
+- API 文档：`http://localhost:8000/api/docs`（Swagger）/ `http://localhost:8000/api/redoc`（ReDoc）
+- 健康检查：`http://localhost:8000/health`
 
 ## 功能矩阵
 
@@ -83,74 +133,6 @@ BM25 稀疏检索 (关键词精确匹配)  ────┘
 - **API 鉴权**：可选的 API Key 鉴权 + 滑动窗口限流
 - **健康检查**：浅层 `/health` + 深度 `/health/deep`（DB/Chroma/LLM 全链路）
 - **日志系统**：10MB 自动轮转 + 第三方库噪音抑制
-
-## 快速开始
-
-### 环境要求
-- Python 3.11+
-- Node.js 20+（前端构建）
-- （可选）Docker & Docker Compose
-
-### 1. 后端
-
-```bash
-# 安装依赖
-pip install -r requirements.lock
-
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env，至少填入 OPENAI_API_KEY
-
-# 抓取论文
-python src/fetch/arxiv.py
-python src/fetch/download_pdf.py
-
-# 解析 PDF（三选一）
-python src/parse/pdf.py              # PyMuPDF 快速解析
-python src/parse/docling_parser.py    # Docling Markdown 解析（推荐）
-# python src/parse/grob.py            # GROBID 精确解析（需 Docker 运行 grobid）
-
-# 启动 API 服务
-uvicorn src.api.main:app --host 127.0.0.1 --port 8000
-```
-
-### 2. 前端
-
-```bash
-cd frontend
-
-# 安装依赖
-npm install
-
-# 开发模式（:5173，自动代理 /api → :8000）
-npm run dev
-
-# 生产构建
-npm run build
-# 产物在 frontend/dist/，由 Nginx 或 FastAPI 静态服务
-```
-
-### 3. 访问
-- 前端开发：`http://localhost:5173`
-- API 文档：`http://localhost:8000/api/docs`（Swagger）/ `http://localhost:8000/api/redoc`（ReDoc）
-- 健康检查：`http://localhost:8000/health`
-
-## Docker 部署
-
-```bash
-# 一键启动（含 Nginx HTTPS + Let's Encrypt 证书自动续期）
-docker compose up -d
-
-# 服务端口
-# HTTP:  80  → 自动跳转 HTTPS
-# HTTPS: 443 → Nginx 反代
-# API:   内部 8000（不对外暴露）
-```
-
-生产部署前需：
-1. 在 `.env` 中填入真实的 `OPENAI_API_KEY`、`API_AUTH_KEY`、`API_CORS_ORIGINS`
-2. 修改 `nginx/paper-assistant.conf.template` 中的域名
-3. 确保服务器的 80/443 端口可公网访问（Let's Encrypt 域名验证）
 
 ## 配置项
 
@@ -215,13 +197,12 @@ docker compose up -d
 | `CACHE_LLM_MAXSIZE` | LLM 缓存容量 | `200` |
 | `CACHE_EMBED_MAXSIZE` | Embedding 缓存容量 | `2000` |
 
-### 安全与部署
+### 安全
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `API_AUTH_ENABLED` | 启用 API 鉴权 | `false` |
+| `API_AUTH_ENABLED` | 启用 API 鉴权（本地使用可关闭） | `false` |
 | `API_AUTH_KEY` | API 密钥 | - |
 | `API_RATE_LIMIT` | 全局限流 | `30/minute` |
-| `API_CORS_ORIGINS` | CORS 允许域名（逗号分隔） | - |
 | `API_HOST` / `API_PORT` | 绑定地址 / 端口 | `127.0.0.1` / `8000` |
 
 ### 其他
@@ -328,10 +309,10 @@ paper-assistant/
 ├── ui/                        # Streamlit 备选 UI（遗留）
 ├── tests/                     # 测试（pytest + 9 个测试文件）
 ├── migrations/                # Alembic 数据库迁移
-├── nginx/                     # Nginx 反代 + SSL 配置
 ├── scripts/                   # 运维脚本（冒烟测试/部署/修复）
-├── docker-compose.yml         # Docker 三服务编排
-├── Dockerfile                 # 后端镜像
+├── docker-compose.yml         # [可选] Docker 部署
+├── Dockerfile                 # [可选] Docker 镜像
+├── nginx/                     # [可选] 线上反代 + SSL
 ├── requirements.txt           # Python 依赖
 └── .github/workflows/ci.yml   # CI（pytest + mypy + ruff + docker build）
 ```
@@ -390,10 +371,6 @@ python scripts/smoke_test_rag.py
 | 精排模型 | BAAI/bge-reranker-v2-m3 (sentence-transformers) |
 | 数据库迁移 | Alembic |
 | 测试 | pytest + pytest-cov + mypy + ruff |
-| 容器化 | Docker + Docker Compose |
-| 反向代理 | Nginx + Let's Encrypt (Certbot) |
 | CI/CD | GitHub Actions |
 
----
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
