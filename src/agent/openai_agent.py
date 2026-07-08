@@ -137,7 +137,7 @@ class OpenAIFunctionsAgent(BaseAgent):
                 # 强制要求 LLM 给出最终答案
                 memory.add({
                     "role": "user",
-                    "content": f"⚠️ {term_reason} 请基于目前已有信息，直接给出最终答案，不要再调用工具。",
+                    "content": f"[WARN] {term_reason} 请基于目前已有信息，直接给出最终答案，不要再调用工具。",
                 })
                 # 最后一次不带 tools 的调用
                 msgs = memory.to_openai_messages()

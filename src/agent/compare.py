@@ -34,11 +34,11 @@ def compare_papers(
         对比分析文本，或错误提示
     """
     text1 = _load_paper_text(arxiv_id1, max_chars)
-    if text1.startswith("⚠️"):
+    if text1.startswith("[ERROR]"):
         return f"论文 A 加载失败: {text1}"
 
     text2 = _load_paper_text(arxiv_id2, max_chars)
-    if text2.startswith("⚠️"):
+    if text2.startswith("[ERROR]"):
         return f"论文 B 加载失败: {text2}"
 
     from src.llm import get_llm, prompts
@@ -61,12 +61,12 @@ def _load_paper_text(arxiv_id: str, max_chars: int) -> str:
     """从 parsed JSON 加载论文正文文本。"""
     json_path = config.PARSED_DIR / f"{arxiv_id}.json"
     if not json_path.exists():
-        return f"⚠️ 未找到解析文件: {json_path}"
+        return f"[ERROR] 未找到解析文件: {json_path}"
 
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception as e:
-        return f"⚠️ 无法读取: {e}"
+        return f"[ERROR] 无法读取: {e}"
 
     sections = data.get("sections", [])
     text_parts = []

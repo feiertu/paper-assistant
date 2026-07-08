@@ -180,15 +180,15 @@ def get_citations(arxiv_id: str) -> str:
 
         lines = [f"论文 {arxiv_id} 的引用关系：\n"]
 
-        lines.append(f"📤 引用了 {len(graph['cites'])} 篇论文：")
+        lines.append(f"引用了 {len(graph['cites'])} 篇论文：")
         for cite in graph["cites"][:10]:
-            badge = "✅" if cite["in_db"] else "🌐"
+            badge = "[DB]" if cite["in_db"] else "[WEB]"
             title = cite.get("cited_title") or cite.get("cited_arxiv_id") or "?"
             lines.append(f"  {badge} {cite['cited_arxiv_id']}: {title[:80]}")
 
-        lines.append(f"\n📥 被 {len(graph['cited_by'])} 篇论文引用：")
+        lines.append(f"\n被 {len(graph['cited_by'])} 篇论文引用：")
         for cite in graph["cited_by"][:10]:
-            badge = "✅" if cite["in_db"] else "🌐"
+            badge = "[DB]" if cite["in_db"] else "[WEB]"
             title = cite.get("citing_title") or cite.get("citing_arxiv_id") or "?"
             lines.append(f"  {badge} {cite['citing_arxiv_id']}: {title[:80]}")
 

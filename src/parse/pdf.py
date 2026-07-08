@@ -190,10 +190,10 @@ def parse_pdf_structure(pdf_path: str, min_body_size: float = 6.5) -> Dict[str, 
 
 def print_structure(result: Dict[str, Any], filename: str):
     metadata = result["metadata"]
-    print(f"📄 [{filename}] {metadata.get('title', 'N/A')}")
-    print(f"   📊 共识别到 {len(result['sections'])} 个章节")
+    print(f"[{filename}] {metadata.get('title', 'N/A')}")
+    print(f"   共识别到 {len(result['sections'])} 个章节")
     for section in result["sections"]:
-        print(f"   📖 [{section['page']}] {section['title']}")
+        print(f"   [{section['page']}] {section['title']}")
         if "subsections" in section:
             for subsection in section["subsections"]:
                 print(f"      └─ [{subsection['page']}] {subsection['title']}")
@@ -213,7 +213,7 @@ def batch_process(input_dir: Optional[str] = None, output_dir: Optional[str] = N
     output_path = Path(output_dir) if output_dir else config.PARSED_DIR
     
     if not input_path.exists():
-        print(f"❌ 输入目录不存在: {input_dir}")
+        print(f"输入目录不存在: {input_dir}")
         return
     
     # 创建输出目录
@@ -223,17 +223,17 @@ def batch_process(input_dir: Optional[str] = None, output_dir: Optional[str] = N
     pdf_files = list(input_path.rglob("*.pdf"))
     
     if not pdf_files:
-        print(f"⚠️  在 {input_dir} 中未找到 PDF 文件")
+        print(f"[WARN] 在 {input_dir} 中未找到 PDF 文件")
         return
     
-    print(f"🚀 开始批量处理，共找到 {len(pdf_files)} 个 PDF 文件\n")
+    print(f"开始批量处理，共找到 {len(pdf_files)} 个 PDF 文件\n")
     
     success_count = 0
     fail_count = 0
     
     for pdf_file in pdf_files:
         try:
-            print(f"📝 处理中: {pdf_file.relative_to(input_path)}")
+            print(f"处理中: {pdf_file.relative_to(input_path)}")
             result = parse_pdf_structure(str(pdf_file), min_body_size)
             
             # 保存到输出目录，保持子目录结构
@@ -248,13 +248,13 @@ def batch_process(input_dir: Optional[str] = None, output_dir: Optional[str] = N
             success_count += 1
             
         except Exception as e:
-            print(f"❌ 处理失败: {pdf_file.name} | 错误: {e}\n")
+            print(f"处理失败: {pdf_file.name} | 错误: {e}\n")
             fail_count += 1
     
     # 打印汇总
     print("=" * 50)
-    print(f"✅ 处理完成！成功: {success_count} | 失败: {fail_count}")
-    print(f"📁 结果已保存至: {output_path.resolve()}")
+    print(f"处理完成！成功: {success_count} | 失败: {fail_count}")
+    print(f"结果已保存至: {output_path.resolve()}")
 
 
 def main():
@@ -262,8 +262,8 @@ def main():
     INPUT_DIR = str(config.RAW_PDF_DIR)
     OUTPUT_DIR = str(config.PARSED_DIR)
 
-    print(f"📂 INPUT  = {INPUT_DIR}")
-    print(f"📂 OUTPUT = {OUTPUT_DIR}")
+    print(f"INPUT  = {INPUT_DIR}")
+    print(f"OUTPUT = {OUTPUT_DIR}")
     batch_process(INPUT_DIR, OUTPUT_DIR, min_body_size=config.PDF_MIN_BODY_SIZE)
 
 

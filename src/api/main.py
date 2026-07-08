@@ -88,6 +88,22 @@ def _validate_config_on_startup() -> None:
 
 _validate_config_on_startup()
 
+
+def _preload_embedding_model() -> None:
+    """预加载 embedding 模型，避免首次入库调用时冷启动（local 模式下加载 SentenceTransformer 需 5-15s）。"""
+    if "local" in config.EMBEDDING_PROVIDER:
+        try:
+            logger.info("预加载本地 embedding 模型...")
+            from src.embed import get_embedder
+            embedder = get_embedder()
+            logger.info("Embedding 模型预加载完成: providers=%s dim=%d",
+                        embedder.providers, embedder.dim)
+        except Exception as e:
+            logger.warning("Embedding 模型预加载失败（将在首次使用时加载）: %s", e)
+
+
+_preload_embedding_model()
+
 # ── App 实例 ──
 
 app = FastAPI(

@@ -61,7 +61,7 @@ class TestComparePapers:
 
         from src.agent.compare import compare_papers
         result = compare_papers("missing.1", "missing.2")
-        assert "⚠️" in result or "失败" in result
+        assert "[ERROR]" in result or "失败" in result
         shutil.rmtree(tmp, ignore_errors=True)
 
 

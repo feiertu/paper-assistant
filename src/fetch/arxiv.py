@@ -1,15 +1,17 @@
 """arXiv API 元数据抓取。
 
 通过 arXiv API 获取论文元数据（标题、作者、摘要、PDF 链接），
-并支持自动保存到 SQLite 数据库。
+并支持自动保存到 SQLite 数据库。内置重试和指数退避。
 """
 
 from __future__ import annotations
 
+import time
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional
 
 import requests
+from requests.exceptions import RequestException, ConnectionError as ReqConnectionError
 
 import config
 from src.logging_config import get_logger
@@ -17,7 +19,15 @@ from src.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def fetch_arxiv_metadata(query: Optional[str] = None, max_results: Optional[int] = None) -> List[Dict]:
+def fetch_arxiv_metadata(
+    query: Optional[str] = None,
+    max_results: Optional[int] = None,
+    max_retries: int = 3,
+) -> List[Dict]:
+    """获取 arXiv 论文元数据，内置重试（指数退避 + 抖动）。
+
+    arXiv API 偶尔会断开连接（RemoteDisconnected），重试可显著提高成功率。
+    """
     q = query or config.ARXIV_QUERY
     n = max_results if max_results is not None else config.ARXIV_MAX_RESULTS
     base_url = "http://export.arxiv.org/api/query"
@@ -30,13 +40,40 @@ def fetch_arxiv_metadata(query: Optional[str] = None, max_results: Optional[int]
     }
 
     logger.info("arXiv fetch: query=%s max=%d", q, n)
-    response = requests.get(base_url, params=params, timeout=config.ARXIV_REQUEST_TIMEOUT)
 
-    if response.status_code != 200:
-        logger.error("arXiv API 返回 %d", response.status_code)
-        return []
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(
+                base_url, params=params,
+                timeout=(10, config.ARXIV_REQUEST_TIMEOUT),  # (connect, read)
+            )
+            if response.status_code != 200:
+                logger.error("arXiv API 返回 %d (attempt %d/%d)", response.status_code, attempt, max_retries)
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                return []
+            return parse_xml(response.content)
+        except (ReqConnectionError, ConnectionError, OSError) as e:
+            last_error = e
+            if attempt < max_retries:
+                wait = 2 ** attempt + (time.monotonic() % 1)  # 指数退避 + 抖动
+                logger.warning(
+                    "arXiv 连接失败 (attempt %d/%d): %s — %.1fs 后重试…",
+                    attempt, max_retries, e, wait,
+                )
+                time.sleep(wait)
+            else:
+                logger.error("arXiv fetch: %d 次重试均失败: %s", max_retries, e)
+        except RequestException as e:
+            last_error = e
+            logger.error("arXiv 请求异常: %s", e)
+            break
 
-    return parse_xml(response.content)
+    if last_error:
+        logger.error("arXiv fetch 最终失败: %s", last_error)
+    return []
 
 
 def parse_xml(xml_content):

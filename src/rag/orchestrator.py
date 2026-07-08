@@ -436,9 +436,9 @@ def get_store_stats() -> Dict[str, Any]:
 
 
 def list_papers(owner_id: str = "") -> List[Dict[str, str]]:
-    """列出已入库论文（优先查传统数据库，回退到向量库扫描）。"""
+    """列出所有论文（优先查传统数据库，回退到向量库扫描）。"""
     paper_dao: PaperDAO = get_dao("paper")
-    db_papers = paper_dao.find_ingested(owner_id=owner_id)
+    db_papers = paper_dao.find_all(limit=500, owner_id=owner_id)
     if db_papers:
         return [{"arxiv_id": p.arxiv_id, "title": p.title} for p in db_papers]
 

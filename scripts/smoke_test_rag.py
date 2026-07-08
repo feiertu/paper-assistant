@@ -29,7 +29,7 @@ def main() -> None:
 
     docs = list(iter_doc_files(parsed_dir))
     if not docs:
-        print(f"❌ 在 {parsed_dir} 没找到任何 JSON。先跑 pdf.py 或 grob.py 的 batch。")
+        print(f"[ERROR] 在 {parsed_dir} 没找到任何 JSON。先跑 pdf.py 或 grob.py 的 batch。")
         return
     print(f"[2] found {len(docs)} parsed docs")
 
@@ -41,7 +41,7 @@ def main() -> None:
     print(f"[3] total chunks = {len(all_chunks)}")
 
     if not all_chunks:
-        print("❌ 分块结果为空。")
+        print("[ERROR] 分块结果为空。")
         return
 
     embedder = get_embedder()
@@ -96,7 +96,7 @@ def main() -> None:
         label = f"rrf={score:.4f}" if hit.get("rrf_score") else f"dist={score:.4f}"
         print(f"  {i}. ({label}) [{hit['metadata'].get('section_title','')}] {doc}…")
 
-    print("\n✅ smoke test done.")
+    print("\nsmoke test done.")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ chown -R paper:paper /app/data /app/logs /app/.cache /app/static 2>/dev/null || 
 
 # HuggingFace 缓存目录（sentence-transformers 本地模型）
 export HF_HOME=/app/.cache/huggingface
+export HOME=/app
 
 # 进程管理
 cleanup() {
