@@ -58,7 +58,6 @@ services:
 
 networks:
   default:
-    name: paper-assistant_default
 
 volumes:
   paper_data:
