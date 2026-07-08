@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
+
+import config
 
 
 class TTLCache:
@@ -31,7 +36,7 @@ class TTLCache:
         value = cache.get("key")  # None if expired or missing
     """
 
-    def __init__(self, maxsize: int = 500, ttl: int = 3600) -> None:
+    def __init__(self, maxsize: int = 500, ttl: int = 3600, persist_path: Optional[str] = None) -> None:
         self._maxsize = maxsize
         self._ttl = ttl  # 秒
         self._store: Dict[str, Tuple[float, Any]] = {}  # key -> (expire_at, value)
@@ -39,6 +44,12 @@ class TTLCache:
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
+        self._persist_path = persist_path
+        self._dirty = False
+
+        # Load from disk if persist path provided
+        if self._persist_path:
+            self._load()
 
     def get(self, key: str) -> Optional[Any]:
         """获取缓存值，过期或不存在返回 None。"""
@@ -66,6 +77,10 @@ class TTLCache:
             expire_at = time.time() + (ttl if ttl is not None else self._ttl)
             self._store[key] = (expire_at, value)
             self._access[key] = time.time()
+            self._dirty = True
+        # Save to disk outside the lock (throttled: only if persist_path set)
+        if self._persist_path:
+            self._save()
 
     def clear(self) -> None:
         """清空缓存。"""
@@ -90,6 +105,55 @@ class TTLCache:
             for k in sorted_keys[:to_remove]:
                 del self._store[k]
                 del self._access[k]
+
+    def _save(self) -> None:
+        """Persist cache to disk as JSON. Thread-safe: copies store under lock."""
+        if not self._persist_path:
+            return
+        try:
+            with self._lock:
+                if not self._dirty:
+                    return
+                # Copy current store: {key: (expire_at, value)}
+                data = {k: list(v) for k, v in self._store.items()}
+                self._dirty = False
+            # Ensure parent directory exists
+            os.makedirs(os.path.dirname(self._persist_path), exist_ok=True)
+            with open(self._persist_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass  # Silently ignore persistence errors
+
+    def _load(self) -> None:
+        """Load cache from disk on startup. Skips expired entries."""
+        if not self._persist_path:
+            return
+        try:
+            if not os.path.exists(self._persist_path):
+                return
+            with open(self._persist_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            now = time.time()
+            loaded = 0
+            with self._lock:
+                for key, entry in data.items():
+                    if not isinstance(entry, list) or len(entry) != 2:
+                        continue
+                    expire_at, value = entry
+                    if now < expire_at:
+                        self._store[key] = (expire_at, value)
+                        self._access[key] = now
+                        loaded += 1
+            if loaded > 0:
+                import logging
+                logging.getLogger(__name__).debug("TTLCache loaded %d entries from %s", loaded, self._persist_path)
+        except Exception:
+            pass  # Silently ignore load errors
+
+    def flush(self) -> None:
+        """Force save to disk immediately."""
+        self._dirty = True
+        self._save()
 
     @property
     def stats(self) -> Dict[str, Any]:
@@ -116,8 +180,8 @@ class TTLCache:
 #  全局缓存实例
 # ══════════════════════════════════════════════
 
-_llm_cache = TTLCache(maxsize=200, ttl=1800)  # LLM 回答缓存 30 分钟
-_embed_cache = TTLCache(maxsize=2000, ttl=86400)  # Embedding 缓存 24 小时
+_llm_cache = TTLCache(maxsize=200, ttl=1800, persist_path=str(config.DATA_DIR / "cache_llm.json"))  # LLM 回答缓存 30 分钟
+_embed_cache = TTLCache(maxsize=2000, ttl=86400, persist_path=str(config.DATA_DIR / "cache_embed.json"))  # Embedding 缓存 24 小时
 
 
 def get_llm_cache() -> TTLCache:

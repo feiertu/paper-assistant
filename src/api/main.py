@@ -589,6 +589,7 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
     dl_result = batch_download(pending, delay=config.PDF_DOWNLOAD_DELAY)
     steps.append({"step": "download", "success": len(dl_result["success"]),
                   "failed": len(dl_result["failed"])})
+    dl_errors = [{"id": f["id"], "error": f.get("error", "下载失败")} for f in dl_result.get("failed", [])]
 
     # 3. 解析 PDF
     import json as _json
@@ -596,6 +597,7 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
     parsed_dir = config.PARSED_DIR
     parsed_dir.mkdir(parents=True, exist_ok=True)
     parsed_cnt = 0
+    parse_errors = []
     for p in papers:
         pdf_path = config.RAW_PDF_DIR / f"{p['id']}.pdf"
         json_path = parsed_dir / f"{p['id']}.json"
@@ -606,6 +608,7 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
                 parsed_cnt += 1
             except Exception as e:
                 logger.error("解析失败 %s: %s", p['id'], e)
+                parse_errors.append({"id": p['id'], "error": str(e)[:200]})
     steps.append({"step": "parse", "count": parsed_cnt})
 
     # 4. 入库 — 只要有论文待处理就执行（已存在 JSON 不会浪费资源）
@@ -617,7 +620,14 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
             steps.append({"step": "ingest", "papers": result.get("papers", 0),
                           "chunks": result.get("chunks", 0)})
 
-    return {"status": "ok", "steps": steps}
+    return {
+        "status": "ok",
+        "steps": steps,
+        "errors": {
+            "download": dl_errors,
+            "parse": parse_errors,
+        },
+    }
 
 
 @app.post("/arxiv/process-pending")

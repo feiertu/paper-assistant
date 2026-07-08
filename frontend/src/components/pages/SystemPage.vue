@@ -20,6 +20,15 @@ onMounted(async () => {
   } catch { /* */ }
 })
 
+const configData = ref<Record<string, any>>({})
+
+async function loadConfig() {
+  try {
+    const resp = await fetch('/api/config')
+    configData.value = await resp.json()
+  } catch { /* */ }
+}
+
 async function clearCache() {
   try { await cacheApi.clear(auth.ownerId, 'all'); location.reload() }
   catch (e) { console.error(e) }
@@ -39,7 +48,7 @@ async function doBackup() {
     <div class="tabs">
       <button :class="{ active: tab === 'status' }" @click="tab = 'status'">状态</button>
       <button :class="{ active: tab === 'backup' }" @click="tab = 'backup'">备份</button>
-      <button :class="{ active: tab === 'config' }" @click="tab = 'config'">配置</button>
+      <button :class="{ active: tab === 'config' }" @click="tab = 'config'; loadConfig()">配置</button>
     </div>
 
     <div v-if="tab === 'status'" class="tab-content">
@@ -85,7 +94,13 @@ async function doBackup() {
     </div>
 
     <div v-if="tab === 'config'" class="tab-content">
-      <p class="hint">运行配置可通过后端 config.py 或环境变量调整。前端当前连接 API: /api</p>
+      <div class="config-grid">
+        <div v-for="(value, key) in configData" :key="key" class="config-row">
+          <span class="config-key">{{ key }}</span>
+          <span class="config-value">{{ value }}</span>
+        </div>
+      </div>
+      <p class="hint mt-2">修改配置请编辑 .env 文件或环境变量</p>
     </div>
   </div>
 </template>
@@ -114,5 +129,10 @@ async function doBackup() {
 .cache-item strong { color: var(--color-ink); }
 .mt-2 { margin-top: 12px; }
 .hint { font-size: 14px; color: var(--color-mute); }
+.config-grid { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--color-hairline); border-radius: var(--radius-md); overflow: hidden; }
+.config-row { display: flex; border-bottom: 1px solid var(--color-hairline); }
+.config-row:last-child { border-bottom: none; }
+.config-key { flex: 0 0 200px; padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--color-ink); background: var(--color-canvas-soft-2); }
+.config-value { flex: 1; padding: 10px 16px; font-size: 13px; color: var(--color-body); word-break: break-all; }
 @media (max-width: 768px) { .stat-grid { grid-template-columns: 1fr; } }
 </style>

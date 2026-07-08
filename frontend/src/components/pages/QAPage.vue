@@ -161,7 +161,7 @@ async function search() {
 .qa-textarea {
   height: auto;
   min-height: 68px;
-  resize: vertical;
+  resize: none;
   font-size: 15px;
   padding: 12px;
 }

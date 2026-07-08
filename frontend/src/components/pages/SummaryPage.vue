@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { useToastStore } from '@/stores/toast'
-import { storeApi, summaryApi, papersApi, arxivApi } from '@/api/client'
+import { storeApi, summaryApi, papersApi } from '@/api/client'
 import ChatBubble from '@/components/common/ChatBubble.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const auth = useAuthStore()
-const toast = useToastStore()
 const tab = ref<'summarize' | 'survey' | 'recommend'>('summarize')
 const papers = ref<{ arxiv_id: string; title: string }[]>([])
 const selectedPaper = ref('')
@@ -22,11 +20,6 @@ const surveyTopK = ref(15)
 // Recommend
 const recTopK = ref(5)
 const similar = ref<{ arxiv_id: string; title: string; score: number; shared_chunks: number }[]>([])
-
-// arXiv fetch
-const fetchQuery = ref('cat:cs.AI AND ti:learning')
-const fetchN = ref(5)
-const fetching = ref(false)
 
 onMounted(async () => {
   try {
@@ -67,25 +60,6 @@ async function doRecommend() {
   finally { loading.value = false }
 }
 
-async function doFetch() {
-  fetching.value = true
-  try {
-    const result = await arxivApi.pipeline(auth.ownerId, fetchQuery.value, fetchN.value)
-    for (const step of result.steps) {
-      const labels: Record<string, string> = { fetch: '搜索', download: '下载', parse: '解析', ingest: '入库' }
-      const label = labels[step.step] || step.step
-      if (step.step === 'fetch') toast.info(`${label}: 找到 ${step.count} 篇`)
-      else if (step.step === 'download') toast.info(`${label}: 成功 ${step.success} 篇${step.failed ? `, 失败 ${step.failed} 篇` : ''}`)
-      else if (step.step === 'ingest') toast.success(`${label}: ${step.papers} 篇 / ${step.chunks} chunks`)
-    }
-    papers.value = await storeApi.papers(auth.ownerId)
-    toast.success('管道完成')
-  } catch (e) {
-    toast.error('arXiv 抓取失败：' + (e instanceof Error ? e.message : '未知错误'))
-  } finally {
-    fetching.value = false
-  }
-}
 </script>
 
 <template>
@@ -99,19 +73,6 @@ async function doFetch() {
       <button :class="{ active: tab === 'recommend' }" @click="tab = 'recommend'">相似推荐</button>
     </div>
 
-    <!-- arXiv import -->
-    <div class="arxiv-import-bar">
-      <details>
-        <summary>从 arXiv 导入论文</summary>
-        <div class="arxiv-form">
-          <input v-model="fetchQuery" class="form-input" placeholder="arXiv 查询语法" />
-          <input v-model.number="fetchN" class="form-input" type="number" min="1" max="50" style="width:80px" />
-          <button class="btn-primary" :disabled="fetching" @click="doFetch">
-            {{ fetching ? '抓取中…' : '一键抓取' }}
-          </button>
-        </div>
-      </details>
-    </div>
 
     <EmptyState v-if="!papers.length" title="暂无论文" description="请先导入论文数据" />
 
@@ -189,18 +150,6 @@ async function doFetch() {
 <style scoped>
 .summary-page { max-width: 900px; }
 .page-desc { font-size: 14px; color: var(--color-body); margin-bottom: 20px; }
-.arxiv-import-bar {
-  background: var(--color-canvas);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-  padding: 14px 20px;
-  margin-bottom: 16px;
-}
-.arxiv-import-bar summary {
-  font-size: 14px; font-weight: 600; color: var(--color-ink);
-  cursor: pointer;
-}
-.arxiv-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 1px solid var(--color-hairline); }
 .tabs button {
   padding: 10px 20px; background: none; border: none; font-size: 14px; font-weight: 500;

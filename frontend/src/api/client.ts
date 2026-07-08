@@ -153,15 +153,15 @@ export const arxivApi = {
   pipeline: (ownerId: string, query: string, maxResults = 5) =>
     post('/arxiv/pipeline', ownerId, {
       query, max_results: maxResults, auto_ingest: true,
-    }, 600_000).then(r => json<import('./types').ArxivPipelineResponse>(r)),
+    }, 1_800_000).then(r => json<import('./types').ArxivPipelineResponse>(r)),
 
   fetch: (ownerId: string, query: string, maxResults = 5) =>
     post('/arxiv/fetch', ownerId, {
       query, max_results: maxResults, auto_ingest: false,
-    }).then(r => json<import('./types').ArxivPipelineResponse>(r)),
+    }, 600_000).then(r => json<import('./types').ArxivPipelineResponse>(r)),
 
   processPending: (ownerId: string) =>
-    post('/arxiv/process-pending', ownerId, {}, 600_000).then(r => json<Record<string, number>>(r)),
+    post('/arxiv/process-pending', ownerId, {}, 1_800_000).then(r => json<Record<string, number>>(r)),
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -237,6 +237,14 @@ export const cacheApi = {
 
   clear: (ownerId: string, kind = 'all') =>
     del(`/cache/clear?kind=${kind}`, ownerId).then(r => json<unknown>(r)),
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Config
+// ══════════════════════════════════════════════════════════════
+
+export const configApi = {
+  get: () => fetch('/api/config').then(r => json<Record<string, any>>(r)),
 }
 
 // ══════════════════════════════════════════════════════════════

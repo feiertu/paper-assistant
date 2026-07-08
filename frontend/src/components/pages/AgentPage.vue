@@ -106,7 +106,7 @@ async function runAgent() {
 
     <div class="qa-input-area">
       <textarea
-        v-model="query" class="form-input" style="height:80px"
+        v-model="query" class="form-input" style="height:80px; resize:none"
         placeholder="例如：找出 VLM 在机器人操作中的最新论文，总结技术路线并推荐研究方向"
       ></textarea>
       <div class="controls-row">

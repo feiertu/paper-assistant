@@ -19,7 +19,11 @@ const ui = useUiStore()
       <Header />
       <main class="app-content">
         <ErrorBoundary>
-          <RouterView />
+          <RouterView v-slot="{ Component }">
+            <KeepAlive>
+              <component :is="Component" />
+            </KeepAlive>
+          </RouterView>
         </ErrorBoundary>
       </main>
     </div>

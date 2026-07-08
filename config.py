@@ -58,7 +58,7 @@ for d in (RAW_PDF_DIR, PARSED_DIR, CHROMA_DIR, PROCESSED_DIR, LOG_DIR):
 
 ARXIV_QUERY: str = _env("ARXIV_QUERY", "cat:cs.AI AND ti:learning") or "cat:cs.AI AND ti:learning"
 ARXIV_MAX_RESULTS: int = _env_int("ARXIV_MAX_RESULTS", 5)
-ARXIV_REQUEST_TIMEOUT: int = _env_int("ARXIV_REQUEST_TIMEOUT", 20)
+ARXIV_REQUEST_TIMEOUT: int = _env_int("ARXIV_REQUEST_TIMEOUT", 60)
 PDF_DOWNLOAD_DELAY: float = _env_float("PDF_DOWNLOAD_DELAY", 3.0)
 
 # ---------- PDF 解析 ----------
@@ -131,6 +131,11 @@ VOYAGE_API_KEY: Optional[str] = _env("VOYAGE_API_KEY")
 
 RAG_TOP_K: int = _env_int("RAG_TOP_K", 5)
 RAG_COLLECTION_NAME: str = _env("RAG_COLLECTION_NAME", "knowledge") or "knowledge"
+
+# ── HNSW 索引参数 ──
+HNSW_M: int = _env_int("HNSW_M", 32)  # More connections = faster search, more memory
+HNSW_EF_CONSTRUCTION: int = _env_int("HNSW_EF_CONSTRUCTION", 200)  # Build-time search depth
+HNSW_EF_SEARCH: int = _env_int("HNSW_EF_SEARCH", 100)  # Query-time search depth
 
 # ── 混合检索（v3） ──
 HYBRID_RETRIEVAL: bool = _env_bool("HYBRID_RETRIEVAL", True)    # 是否启用混合检索

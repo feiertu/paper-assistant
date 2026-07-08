@@ -38,7 +38,12 @@ class VectorStore:
         self._collection_name = collection_name or config.RAG_COLLECTION_NAME
         self._collection: Collection = self._client.get_or_create_collection(
             name=self._collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={
+                "hnsw:space": "cosine",
+                "hnsw:M": config.HNSW_M,
+                "hnsw:construction_ef": config.HNSW_EF_CONSTRUCTION,
+                "hnsw:search_ef": config.HNSW_EF_SEARCH,
+            },
         )
 
     # ---------- 基础属性 ----------
@@ -59,7 +64,12 @@ class VectorStore:
         self._client.delete_collection(self._collection_name)
         self._collection = self._client.get_or_create_collection(
             name=self._collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={
+                "hnsw:space": "cosine",
+                "hnsw:M": config.HNSW_M,
+                "hnsw:construction_ef": config.HNSW_EF_CONSTRUCTION,
+                "hnsw:search_ef": config.HNSW_EF_SEARCH,
+            },
         )
 
     # ---------- 写入 ----------

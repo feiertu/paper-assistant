@@ -366,7 +366,18 @@ def summarize_paper(
 
     json_path = config.PARSED_DIR / f"{arxiv_id}.json"
     if not json_path.exists():
-        return f"[ERROR] 未找到解析文件：{json_path}"
+        # Fallback: generate summary from vector store chunks
+        from src.store import VectorStore
+        store = VectorStore()
+        chunks = store.get_by_arxiv_id(arxiv_id, limit=100)
+        if not chunks:
+            return f"[ERROR] 未找到解析文件且向量库中也无分块数据：{json_path}"
+        # Build context from chunks
+        context_text = "\n\n".join([c.get("document", "")[:500] for c in chunks[:30]])
+        if len(context_text) > max_chars:
+            context_text = context_text[:max_chars] + "…"
+        llm = get_llm()
+        return llm.summarize(context_text, lang=lang, arxiv_id=arxiv_id)
 
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))

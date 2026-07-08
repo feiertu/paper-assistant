@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -353,6 +354,10 @@ def rrf_rerank(
 
 # ---------- 混合检索（v3：稠密 + BM25 稀疏 + Cross-Encoder 精排）----------
 
+# Module-level BM25 cache
+_bm25_cache: Dict[str, Any] = {"index": None, "count": 0, "timestamp": 0.0}
+_BM25_CACHE_TTL = 60.0  # seconds
+
 
 def hybrid_retrieve(
     query: str,
@@ -422,20 +427,33 @@ def hybrid_retrieve(
     # BM25 稀疏检索
     if use_bm25:
         try:
-            # 从 store 获取所有文档构建 BM25 索引
-            all_items = store.peek(limit=min(store.count(), 2000))
-            bm25 = BM25Index()
-            docs = []
-            ids = []
-            for item in all_items:
-                doc_text = item.get("document", "")
-                if doc_text and doc_text.strip():
-                    docs.append(doc_text)
-                    ids.append(item.get("id", ""))
+            # Use cached BM25 if count unchanged
+            now = time.time()
+            if (_bm25_cache["index"] is not None and
+                _bm25_cache["count"] == store.count() and
+                now - _bm25_cache["timestamp"] < _BM25_CACHE_TTL):
+                bm25_hits = _bm25_cache["index"].search(query, top_k=n)
+            else:
+                all_items = store.peek(limit=min(store.count(), 2000))
+                bm25 = BM25Index()
+                docs = []
+                ids = []
+                for item in all_items:
+                    doc_text = item.get("document", "")
+                    if doc_text and doc_text.strip():
+                        docs.append(doc_text)
+                        ids.append(item.get("id", ""))
 
-            if docs:
-                bm25.index(docs, ids)
-                bm25_hits = bm25.search(query, top_k=n)
+                if docs:
+                    bm25.index(docs, ids)
+                    bm25_hits = bm25.search(query, top_k=n)
+                    _bm25_cache["index"] = bm25
+                    _bm25_cache["count"] = store.count()
+                    _bm25_cache["timestamp"] = now
+                else:
+                    bm25_hits = []
+
+            if bm25_hits:
                 # 将 BM25 分数归一化到 [0,1]
                 max_score = max((h["score"] for h in bm25_hits), default=1.0)
                 for h in bm25_hits:
