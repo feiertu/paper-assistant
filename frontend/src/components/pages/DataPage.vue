@@ -3,13 +3,13 @@ import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useToastStore } from '@/stores/toast'
 import { storeApi, queriesApi, papersApi } from '@/api/client'
-import type { StoreStats, Paper, QueryRecord } from '@/api/types'
+import type { StoreStats, QueryRecord } from '@/api/types'
 
 const auth = useAuthStore()
 const toast = useToastStore()
 const tab = ref<'ingest' | 'export' | 'history'>('ingest')
 const storeStats = ref<StoreStats>({ count: 0 })
-const ingestPapers = ref<Paper[]>([])
+const ingestPapers = ref<{ arxiv_id: string; title: string }[]>([])
 const queries = ref<QueryRecord[]>([])
 const loading = ref(false)
 
