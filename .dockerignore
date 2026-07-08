@@ -14,15 +14,21 @@ env/
 .idea/
 .claude/
 
-# Frontend (built separately in multi-stage)
+# Frontend — 只保留 dist，排除源码和 node_modules
 frontend/node_modules/
-frontend/dist/
+frontend/src/
+frontend/public/
+frontend/index.html
+frontend/package.json
+frontend/package-lock.json
+frontend/tsconfig*.json
+frontend/vite.config.ts
+frontend/*.md
 
-# Runtime data (mounted as volumes)
-data/raw/*.pdf
-data/raw/*.json
-data/chroma_db/
-data/processed/
+# Runtime data (volume 挂载，不需要打包)
+data/
+
+# Logs
 logs/
 *.log
 
@@ -41,8 +47,12 @@ scripts/
 .streamlit/
 ui/
 
+# Tests
+tests/
+
 # Cache
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .coverage
+__pycache__/
