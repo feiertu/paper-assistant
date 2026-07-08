@@ -33,14 +33,14 @@ COPY --chown=paper:paper config.py .
 COPY --chown=paper:paper entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# 前端构建产物
-COPY --from=frontend-builder /frontend/dist /app/static
+# 前端构建产物 — 先放入暂存目录，启动时由 entrypoint 同步到 volume
+COPY --from=frontend-builder /frontend/dist /app/static_dist
 
 # 数据目录
 RUN mkdir -p /app/data/parsed /app/data/chroma_db /app/data/raw \
     /app/data/processed /app/logs /app/data/chroma_backup \
     /app/.cache/huggingface \
-    && chown -R paper:paper /app/data /app/logs /app/.cache /app/static
+    && chown -R paper:paper /app/data /app/logs /app/.cache /app/static_dist
 
 ENV HF_HOME=/app/.cache/huggingface \
     HOME=/app

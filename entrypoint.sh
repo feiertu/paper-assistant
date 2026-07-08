@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+# ── 同步前端静态文件到 volume ──
+# paper_static volume 持久化会覆盖镜像内文件，每次启动重新同步
+if [ -d /app/static_dist ] && [ "$(ls -A /app/static_dist 2>/dev/null)" ]; then
+    echo "==> 同步前端静态文件到 volume..."
+    mkdir -p /app/static
+    rsync -a --delete /app/static_dist/ /app/static/ 2>/dev/null || cp -a /app/static_dist/. /app/static/
+    echo "==> 静态文件同步完成 ($(ls /app/static | wc -l) 项)"
+fi
+
 # ── 修复 volume 权限 ──
 chown -R paper:paper /app/data /app/logs /app/.cache /app/static 2>/dev/null || true
 
