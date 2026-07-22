@@ -183,7 +183,8 @@ def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = 
 
 
 if __name__ == "__main__":
-    papers = fetch_and_persist()
+    result = fetch_and_persist()
+    papers = result["papers"]
     for p in papers:
         print(f"标题: {p['title']}")
         print(f"作者: {p['authors']}")

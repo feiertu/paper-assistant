@@ -505,6 +505,15 @@ def arxiv_fetch(req: ArxivFetchRequest, request: Request):
     query = req.query or None
     result = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
     papers = result["papers"]
+    _save_fetch_history(
+        query=req.query, max_results=req.max_results,
+        total_found=result["total_found"], fetched=result["new_count"],
+        skipped=len(result["skipped_papers"]),
+        skipped_papers=result["skipped_papers"],
+        download_success=0, download_failed=0,
+        parse_success=0, parse_failed=0, ingested=0,
+        owner_id=owner_id,
+    )
     return {
         "status": "ok",
         "count": len(papers),
