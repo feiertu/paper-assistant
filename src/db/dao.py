@@ -294,6 +294,7 @@ def get_dao(name: str):
             "query": QueryDAO(),
             "collection": CollectionDAO(),
             "citation": CitationDAO(),
+            "fetch_history": FetchHistoryDAO(),
         }
     dao = _daos.get(name)
     if dao is None:
@@ -396,6 +397,54 @@ class CitationDAO:
         with get_connection() as conn:
             conn.execute("DELETE FROM citations")
             conn.commit()
+
+
+# ══════════════════════════════════════════════
+#  FetchHistoryDAO — 抓取历史访问
+# ══════════════════════════════════════════════
+
+class FetchHistoryDAO:
+    """抓取历史 DAO。"""
+
+    def insert(self, record) -> int:
+        with get_connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO fetch_history
+                   (query_text, max_results, total_found, fetched, skipped,
+                    download_success, download_failed, parse_success, parse_failed,
+                    ingested, skipped_papers, owner_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (record.query_text, record.max_results, record.total_found,
+                 record.fetched, record.skipped, record.download_success,
+                 record.download_failed, record.parse_success, record.parse_failed,
+                 record.ingested, record.skipped_papers, record.owner_id),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def find_all(self, limit: int = 20, offset: int = 0, owner_id: str = ""):
+        from src.db.schema import FetchHistory
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fetch_history WHERE owner_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (owner_id, limit, offset),
+            ).fetchall()
+            return [FetchHistory.from_row(r) for r in rows]
+
+    def find_by_id(self, record_id: int, owner_id: str = ""):
+        from src.db.schema import FetchHistory
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM fetch_history WHERE id = ? AND owner_id = ?",
+                (record_id, owner_id),
+            ).fetchone()
+            return FetchHistory.from_row(row) if row else None
+
+    def count(self, owner_id: str = "") -> int:
+        with get_connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM fetch_history WHERE owner_id = ?", (owner_id,)
+            ).fetchone()[0]
 
 
 # ══════════════════════════════════════════════
