@@ -298,7 +298,7 @@ def get_dao(name: str):
         }
     dao = _daos.get(name)
     if dao is None:
-        raise ValueError(f"未知 DAO: {name!r}，可选: paper / query / collection / citation")
+        raise ValueError(f"未知 DAO: {name!r}，可选: paper / query / collection / citation / fetch_history")
     return dao
 
 
