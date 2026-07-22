@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { papersApi, arxivApi, storeApi } from '@/api/client'
+import { papersApi, storeApi } from '@/api/client'
 import type { Paper } from '@/api/types'
 import PaperCard from '@/components/common/PaperCard.vue'
 import PaperDetail from '@/components/common/PaperDetail.vue'
@@ -25,11 +25,6 @@ const sortBy = ref('created_at')
 const loading = ref(false)
 const totalPages = ref(1)
 const totalAll = ref(0)
-
-// arXiv fetch
-const fetchQuery = ref('cat:cs.AI AND ti:learning')
-const fetchN = ref(5)
-const fetching = ref(false)
 
 // Pending
 const pendingCount = ref(0)
@@ -72,27 +67,6 @@ async function loadPapers() {
     console.error('Failed to load papers:', e)
   } finally {
     loading.value = false
-  }
-}
-
-async function doFetch() {
-  fetching.value = true
-  try {
-    const result = await arxivApi.pipeline(auth.ownerId, fetchQuery.value, fetchN.value)
-    for (const step of result.steps) {
-      const labels: Record<string, string> = { fetch: '搜索', download: '下载', parse: '解析', ingest: '入库' }
-      const label = labels[step.step] || step.step
-      if (step.step === 'fetch') toast.info(`${label}: 找到 ${step.count} 篇`)
-      else if (step.step === 'download') toast.info(`${label}: 成功 ${step.success} 篇${step.failed ? `, 失败 ${step.failed} 篇` : ''}`)
-      else if (step.step === 'ingest') toast.success(`${label}: ${step.papers} 篇 / ${step.chunks} chunks`)
-    }
-    await loadPapers()
-    await checkPending()
-    toast.success('管道完成！同名论文自动去重。')
-  } catch (e) {
-    toast.error('arXiv 抓取失败：' + (e instanceof Error ? e.message : '未知错误'))
-  } finally {
-    fetching.value = false
   }
 }
 
@@ -141,18 +115,7 @@ onMounted(() => {
     <!-- Quick Actions -->
     <div class="actions-bar">
       <button class="btn-secondary" @click="doIngest">重新入库</button>
-      <div class="arxiv-section">
-        <details>
-          <summary>从 arXiv 抓取论文</summary>
-          <div class="arxiv-form">
-            <input v-model="fetchQuery" class="form-input" placeholder="arXiv 查询语法" />
-            <input v-model.number="fetchN" class="form-input" type="number" min="1" max="50" style="width:80px" />
-            <button class="btn-primary" :disabled="fetching" @click="doFetch">
-              {{ fetching ? '抓取中…' : '一键抓取' }}
-            </button>
-          </div>
-        </details>
-      </div>
+      <router-link to="/fetch" class="btn-secondary" style="text-decoration:none">前往论文抓取 →</router-link>
     </div>
 
     <div v-if="pendingCount > 0" class="pending-bar">
@@ -209,7 +172,7 @@ onMounted(() => {
 .library-page { max-width: 1100px; }
 .page-desc { font-size: 14px; color: var(--color-body); margin-bottom: 20px; }
 .actions-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-.arxiv-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+
 .pending-bar {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 16px; background: #fef3c7; border-radius: var(--radius-sm);

@@ -21,6 +21,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { key: 'qa', label: '智能问答', icon: '' },
   { key: 'agent', label: '智能分析', icon: '' },
+  { key: 'fetch', label: '论文抓取', icon: '' },
   { key: 'library', label: '论文库', icon: '' },
   { key: 'summary', label: '摘要 & 综述', icon: '' },
   { key: 'citations', label: '引用关系', icon: '' },
