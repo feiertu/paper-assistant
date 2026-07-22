@@ -150,7 +150,7 @@ def save_metadata_to_db(papers: List[Dict], owner_id: str = "") -> int:
 
 
 def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = None,
-                      owner_id: str = "") -> List[Dict]:
+                      owner_id: str = "") -> dict:
     """抓取 arXiv 元数据并保存到数据库。已入库的论文自动跳过不重复抓取。"""
     from src.db import get_dao
 
@@ -161,6 +161,7 @@ def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = 
     # 过滤已入库论文 — 待处理/失败的仍允许重试
     ingested_ids = paper_dao.get_existing_ids(owner_id=owner_id)
     new_papers = [p for p in papers if p["id"] not in ingested_ids]
+    skipped_papers = [{"id": p["id"], "title": p["title"]} for p in papers if p["id"] in ingested_ids]
     skipped = len(papers) - len(new_papers)
 
     if new_papers:
@@ -173,7 +174,12 @@ def fetch_and_persist(query: Optional[str] = None, max_results: Optional[int] = 
     elif papers and skipped == len(papers):
         logger.info("全部 %d 篇论文已入库，跳过", skipped)
 
-    return new_papers if new_papers else papers
+    return {
+        "papers": new_papers if new_papers else papers,
+        "skipped_papers": skipped_papers,
+        "total_found": len(papers),
+        "new_count": len(new_papers),
+    }
 
 
 if __name__ == "__main__":
