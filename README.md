@@ -81,9 +81,11 @@ npm run build
 ### 论文获取
 | 功能 | 说明 |
 |------|------|
+| 抓取中心 | 独立页面统一管理 arXiv 抓取，展示去重/成功/失败详情 |
 | arXiv 批量抓取 | 关键词/分类搜索，自动去重入库 |
 | PDF 断点续传 | HTTP Range 续传 + 多层重试 + 下载延迟控制 |
 | 一键管线 | 搜索 → 下载 → 解析 → 入库，全自动流转 |
+| 抓取历史 | 持久化抓取记录，回溯过往结果和跳过论文 |
 
 ### PDF 解析（三后端可选）
 | 后端 | 特点 | 适用场景 |
@@ -123,6 +125,7 @@ BM25 稀疏检索 (关键词精确匹配)  ────┘
 
 ### 论文管理
 - 论文库浏览（分页、关键词/作者/年份/状态筛选）
+- 论文抓取中心（独立抓取页面 + 去重透明 + 历史回溯）
 - 引用关系图（SVG 可视化 + 在库标记）
 - 收藏夹管理
 - 数据导出（JSON / CSV / BibTeX）
@@ -300,7 +303,7 @@ paper-assistant/
 │   │   ├── components/
 │   │   │   ├── layout/        #   布局（AppShell / Header / Sidebar / AuthDialog）
 │   │   │   ├── common/        #   通用组件（PaperCard/ChatBubble/Pagination等 12 个）
-│   │   │   └── pages/         #   8 个页面（QA/Agent/Library/Summary/Citations/Data/System/Help）
+│   │   │   └── pages/         #   9 个页面（QA/Agent/Fetch/Library/Summary/Citations/Data/System/Help）
 │   │   ├── composables/       #   组合式函数（useStreaming / useTheme）
 │   │   ├── stores/            #   Pinia 状态管理（auth / ui / toast）
 │   │   ├── router/            #   Vue Router 路由
@@ -332,6 +335,7 @@ paper-assistant/
 | 论文 | `/api/papers` (列表/搜索/CRUD) | GET/POST/DELETE |
 | 引用 | `/api/citations/{arxiv_id}`, `/api/citations/extract` | GET/POST |
 | 管线 | `/api/arxiv/pipeline`, `/api/arxiv/process-pending` | POST |
+| 抓取 | `/api/fetch/history`, `/api/fetch/history/{id}` | GET |
 | 导出 | `/api/export/papers`, `/api/export/queries` | GET |
 | 向量库 | `/api/store/stats`, `/api/store/backup`, `/api/store/restore` | GET/POST |
 | 缓存 | `/api/cache/stats`, `/api/cache/clear` | GET/POST |

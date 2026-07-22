@@ -6,8 +6,8 @@
   - ORM 映射：dataclass → 表行
 """
 
-from .schema import init_db, get_connection, Paper, QueryRecord, Collection
-from .dao import PaperDAO, QueryDAO, CollectionDAO, get_dao
+from .schema import init_db, get_connection, Paper, QueryRecord, Collection, FetchHistory
+from .dao import PaperDAO, QueryDAO, CollectionDAO, CitationDAO, FetchHistoryDAO, get_dao
 
 __all__ = [
     "init_db",
@@ -15,8 +15,11 @@ __all__ = [
     "Paper",
     "QueryRecord",
     "Collection",
+    "FetchHistory",
     "PaperDAO",
     "QueryDAO",
     "CollectionDAO",
+    "CitationDAO",
+    "FetchHistoryDAO",
     "get_dao",
 ]
