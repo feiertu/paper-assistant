@@ -20,6 +20,12 @@ const router = createRouter({
       meta: { title: '智能分析' },
     },
     {
+      path: '/fetch',
+      name: 'fetch',
+      component: () => import('@/components/pages/FetchPage.vue'),
+      meta: { title: '论文抓取' },
+    },
+    {
       path: '/library',
       name: 'library',
       component: () => import('@/components/pages/LibraryPage.vue'),

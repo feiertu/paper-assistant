@@ -258,3 +258,14 @@ export const exportApi = {
   queriesUrl: (_ownerId: string, fmt = 'json', limit = 500) =>
     `${API_BASE}/export/queries?fmt=${fmt}&limit=${limit}`,
 }
+
+// ══════════════════════════════════════════════════════════════
+//  Fetch History
+// ══════════════════════════════════════════════════════════════
+
+export const fetchApi = {
+  history: (ownerId: string, limit = 20, offset = 0) =>
+    get('/fetch/history', ownerId, { limit, offset }).then(r => json<import('./types').FetchHistoryResponse>(r)),
+  historyDetail: (ownerId: string, id: number) =>
+    get(`/fetch/history/${id}`, ownerId).then(r => json<import('./types').FetchRecord>(r)),
+}

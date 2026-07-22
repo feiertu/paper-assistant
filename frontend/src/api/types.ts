@@ -177,3 +177,13 @@ export interface Collection {
   paper_count: number
   created_at: string
 }
+
+export interface SkippedPaper { id: string; title: string }
+export interface FetchRecord {
+  id: number; query_text: string; max_results: number;
+  total_found: number; fetched: number; skipped: number;
+  download_success: number; download_failed: number;
+  parse_success: number; parse_failed: number; ingested: number;
+  skipped_papers: SkippedPaper[]; owner_id: string; created_at: string;
+}
+export interface FetchHistoryResponse { records: FetchRecord[]; total: number }
