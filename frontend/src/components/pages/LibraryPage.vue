@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { papersApi, storeApi } from '@/api/client'
+import { papersApi, arxivApi, storeApi } from '@/api/client'
 import type { Paper } from '@/api/types'
 import PaperCard from '@/components/common/PaperCard.vue'
 import PaperDetail from '@/components/common/PaperDetail.vue'

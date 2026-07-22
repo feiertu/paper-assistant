@@ -24,7 +24,7 @@ interface LastResult {
   skipped_papers: { id: string; title: string }[]
 }
 const lastResult = ref<LastResult | null>(null)
-const showSkipped = ref(false)
+const showSkipped = ref(true)
 
 // ── History state ──
 const history = ref<FetchRecord[]>([])
@@ -152,7 +152,7 @@ onMounted(() => {
             class="form-input"
             type="number"
             min="1"
-            max="100"
+            max="50"
             style="width: 120px"
           />
         </div>

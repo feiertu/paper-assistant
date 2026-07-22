@@ -483,12 +483,16 @@ def ingest_text_route(req: IngestTextRequest):
 # ── arXiv 抓取管道 ──
 
 def _save_fetch_history(query, max_results, total_found, fetched, skipped, skipped_papers, download_success, download_failed, parse_success, parse_failed, ingested, owner_id):
-    import json as _json
-    from src.db.schema import FetchHistory
-    dao = get_dao("fetch_history")
-    record = FetchHistory(query_text=query or "", max_results=max_results, total_found=total_found, fetched=fetched, skipped=skipped, download_success=download_success, download_failed=download_failed, parse_success=parse_success, parse_failed=parse_failed, ingested=ingested, skipped_papers=_json.dumps(skipped_papers, ensure_ascii=False), owner_id=owner_id)
-    rid = dao.insert(record)
-    logger.info("抓取历史已保存: id=%d query=%s fetched=%d skipped=%d", rid, query[:50], fetched, skipped)
+    """将抓取结果写入 fetch_history 表。写入失败不影响主流程。"""
+    try:
+        import json as _json
+        from src.db.schema import FetchHistory
+        dao = get_dao("fetch_history")
+        record = FetchHistory(query_text=query or "", max_results=max_results, total_found=total_found, fetched=fetched, skipped=skipped, download_success=download_success, download_failed=download_failed, parse_success=parse_success, parse_failed=parse_failed, ingested=ingested, skipped_papers=_json.dumps(skipped_papers, ensure_ascii=False), owner_id=owner_id)
+        rid = dao.insert(record)
+        logger.info("抓取历史已保存: id=%d query=%s fetched=%d skipped=%d", rid, query[:50], fetched, skipped)
+    except Exception as e:
+        logger.error("保存抓取历史失败: %s", e)
 
 class ArxivFetchRequest(BaseModel):
     query: str = Field(default="", description="arXiv 搜索查询，留空使用默认配置")
