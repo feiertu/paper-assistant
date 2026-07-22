@@ -482,6 +482,14 @@ def ingest_text_route(req: IngestTextRequest):
 
 # ── arXiv 抓取管道 ──
 
+def _save_fetch_history(query, max_results, total_found, fetched, skipped, skipped_papers, download_success, download_failed, parse_success, parse_failed, ingested, owner_id):
+    import json as _json
+    from src.db.schema import FetchHistory
+    dao = get_dao("fetch_history")
+    record = FetchHistory(query_text=query or "", max_results=max_results, total_found=total_found, fetched=fetched, skipped=skipped, download_success=download_success, download_failed=download_failed, parse_success=parse_success, parse_failed=parse_failed, ingested=ingested, skipped_papers=_json.dumps(skipped_papers, ensure_ascii=False), owner_id=owner_id)
+    rid = dao.insert(record)
+    logger.info("抓取历史已保存: id=%d query=%s fetched=%d skipped=%d", rid, query[:50], fetched, skipped)
+
 class ArxivFetchRequest(BaseModel):
     query: str = Field(default="", description="arXiv 搜索查询，留空使用默认配置")
     max_results: int = Field(default=5, ge=1, le=50, description="最多抓取篇数")
@@ -495,10 +503,12 @@ def arxiv_fetch(req: ArxivFetchRequest, request: Request):
 
     owner_id = get_owner_id(request)
     query = req.query or None
-    papers = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
+    result = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
+    papers = result["papers"]
     return {
         "status": "ok",
         "count": len(papers),
+        "skipped": len(result["skipped_papers"]),
         "papers": [{"arxiv_id": p["id"], "title": p["title"][:120]} for p in papers],
     }
 
@@ -577,9 +587,17 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
     # 1. 搜索并保存元数据
     from src.fetch.arxiv import fetch_and_persist
     query = req.query or None
-    papers = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
+    fetch_result = fetch_and_persist(query=query, max_results=req.max_results, owner_id=owner_id)
+    papers = fetch_result["papers"]
     steps.append({"step": "fetch", "count": len(papers)})
     if not papers:
+        _save_fetch_history(query=query, max_results=req.max_results,
+                            total_found=fetch_result["total_found"],
+                            fetched=0, skipped=fetch_result["total_found"],
+                            skipped_papers=fetch_result["skipped_papers"],
+                            download_success=0, download_failed=0,
+                            parse_success=0, parse_failed=0,
+                            ingested=0, owner_id=owner_id)
         return {"status": "ok", "steps": steps, "message": "arXiv 搜索无结果"}
 
     # 2. 下载 PDF
@@ -612,13 +630,29 @@ def arxiv_pipeline(req: ArxivPipelineRequest, request: Request):
     steps.append({"step": "parse", "count": parsed_cnt})
 
     # 4. 入库 — 只要有论文待处理就执行（已存在 JSON 不会浪费资源）
+    ingest_papers = 0
+    ingest_chunks = 0
     if req.auto_ingest:
-        result = ingest_parsed_dir(owner_id=owner_id)
-        if "error" in result:
-            steps.append({"step": "ingest", "error": result["error"]})
+        ingest_result = ingest_parsed_dir(owner_id=owner_id)
+        if "error" in ingest_result:
+            steps.append({"step": "ingest", "error": ingest_result["error"]})
         else:
-            steps.append({"step": "ingest", "papers": result.get("papers", 0),
-                          "chunks": result.get("chunks", 0)})
+            ingest_papers = ingest_result.get("papers", 0)
+            ingest_chunks = ingest_result.get("chunks", 0)
+            steps.append({"step": "ingest", "papers": ingest_papers,
+                          "chunks": ingest_chunks})
+
+    _save_fetch_history(query=query, max_results=req.max_results,
+                        total_found=fetch_result["total_found"],
+                        fetched=len(papers),
+                        skipped=fetch_result["total_found"] - len(papers),
+                        skipped_papers=fetch_result["skipped_papers"],
+                        download_success=len(dl_result.get("success", [])),
+                        download_failed=len(dl_result.get("failed", [])),
+                        parse_success=parsed_cnt,
+                        parse_failed=len(parse_errors),
+                        ingested=ingest_papers,
+                        owner_id=owner_id)
 
     return {
         "status": "ok",
@@ -683,6 +717,14 @@ def arxiv_process_pending(request: Request):
             ingest_error = result["error"]
             logger.error("入库失败: %s", ingest_error)
 
+    _save_fetch_history(query="<手动处理待入库>", max_results=len(pending),
+                        total_found=len(pending), fetched=len(pending),
+                        skipped=0, skipped_papers=[],
+                        download_success=dl_ok, download_failed=dl_fail,
+                        parse_success=parsed_cnt, parse_failed=dl_ok - parsed_cnt if dl_ok > parsed_cnt else 0,
+                        ingested=ingest_result.get("papers", 0),
+                        owner_id=owner_id)
+
     return {
         "status": "ok",
         "total": len(pending),
@@ -693,6 +735,24 @@ def arxiv_process_pending(request: Request):
         "chunks": ingest_result.get("chunks", 0),
         "ingest_error": ingest_error,
     }
+
+
+@app.get("/fetch/history")
+def fetch_history_list(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), request: Request = None):
+    owner_id = get_owner_id(request) if request else ""
+    dao = get_dao("fetch_history")
+    records = dao.find_all(limit=limit, offset=offset, owner_id=owner_id)
+    return {"records": [r.to_dict() for r in records], "total": dao.count(owner_id=owner_id)}
+
+
+@app.get("/fetch/history/{record_id}")
+def fetch_history_detail(record_id: int, request: Request = None):
+    owner_id = get_owner_id(request) if request else ""
+    dao = get_dao("fetch_history")
+    record = dao.find_by_id(record_id, owner_id=owner_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"抓取记录不存在: {record_id}")
+    return record.to_dict()
 
 
 # ── 向量库管理 ──
