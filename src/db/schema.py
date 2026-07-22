@@ -124,6 +124,64 @@ class Collection:
         )
 
 
+@dataclass
+class FetchHistory:
+    """抓取历史（对应 fetch_history 表）。"""
+
+    query_text: str
+    max_results: int = 5
+    total_found: int = 0
+    fetched: int = 0
+    skipped: int = 0
+    download_success: int = 0
+    download_failed: int = 0
+    parse_success: int = 0
+    parse_failed: int = 0
+    ingested: int = 0
+    skipped_papers: str = "[]"
+    owner_id: str = ""
+    id: Optional[int] = None
+    created_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        import json as _json
+        return {
+            "id": self.id,
+            "query_text": self.query_text,
+            "max_results": self.max_results,
+            "total_found": self.total_found,
+            "fetched": self.fetched,
+            "skipped": self.skipped,
+            "download_success": self.download_success,
+            "download_failed": self.download_failed,
+            "parse_success": self.parse_success,
+            "parse_failed": self.parse_failed,
+            "ingested": self.ingested,
+            "skipped_papers": _json.loads(self.skipped_papers) if self.skipped_papers else [],
+            "owner_id": self.owner_id,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "FetchHistory":
+        return cls(
+            id=row["id"],
+            query_text=row["query_text"],
+            max_results=row["max_results"],
+            total_found=row["total_found"] or 0,
+            fetched=row["fetched"] or 0,
+            skipped=row["skipped"] or 0,
+            download_success=row["download_success"] or 0,
+            download_failed=row["download_failed"] or 0,
+            parse_success=row["parse_success"] or 0,
+            parse_failed=row["parse_failed"] or 0,
+            ingested=row["ingested"] or 0,
+            skipped_papers=row["skipped_papers"] or "[]",
+            owner_id=row["owner_id"] if "owner_id" in row.keys() else "",
+            created_at=row["created_at"] or "",
+        )
+
+
 # ── DDL（建表语句） ──
 
 DDL = """
@@ -220,6 +278,27 @@ CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
     INSERT INTO papers_fts(rowid, title, authors, abstract)
     VALUES (new.id, new.title, new.authors, new.abstract);
 END;
+
+-- 抓取历史（实体：FetchHistory）
+CREATE TABLE IF NOT EXISTS fetch_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_text      TEXT    NOT NULL,
+    max_results     INTEGER NOT NULL DEFAULT 5,
+    total_found     INTEGER DEFAULT 0,
+    fetched         INTEGER DEFAULT 0,
+    skipped         INTEGER DEFAULT 0,
+    download_success INTEGER DEFAULT 0,
+    download_failed INTEGER DEFAULT 0,
+    parse_success   INTEGER DEFAULT 0,
+    parse_failed    INTEGER DEFAULT 0,
+    ingested        INTEGER DEFAULT 0,
+    skipped_papers  TEXT    DEFAULT '[]',
+    owner_id        TEXT    DEFAULT '',
+    created_at      TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_fetch_history_owner ON fetch_history(owner_id);
+CREATE INDEX IF NOT EXISTS idx_fetch_history_created ON fetch_history(created_at);
 """
 
 
