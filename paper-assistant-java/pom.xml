@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.2</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.paperassistant</groupId>
+    <artifactId>paper-assistant-java</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>paper-assistant-java</name>
+    <description>Paper Assistant backend — Java Spring Boot rewrite of the Python FastAPI service</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <!-- Spring Boot 3.4.2 manages Lombok 1.18.36, which does NOT support the
+             JDK 25 javac that Maven runs on (see Task 1 report), causing Lombok
+             codegen to be silently skipped. 1.18.40+ adds JDK 25 support. -->
+        <lombok.version>1.18.40</lombok.version>
+        <!-- maven-compiler-plugin reads <proc> from ${maven.compiler.proc}. On JDK 21+
+             javac invoked by the plugin's in-process compiler does NOT run annotation
+             processors discovered on the classpath (Lombok silently produces no
+             getters/builders while still compiling SUCCESS). Forcing proc=full makes
+             Lombok codegen reliable; without it, the Task 2 entities have no getters
+             and Spring Data would fail at runtime. -->
+        <maven.compiler.proc>full</maven.compiler.proc>
+        <spring-ai.version>1.0.0-M6</spring-ai.version>
+        <langchain4j.version>1.0.0-beta1</langchain4j.version>
+        <pdfbox.version>3.0.3</pdfbox.version>
+        <lucene.version>9.12.0</lucene.version>
+        <!-- Spring Boot 3.4.2 manages Testcontainers 1.20.4, whose bundled
+             docker-java cannot talk to Docker Engine 29.x (npipe ping returns
+             400 "BadRequest"). 1.21.x bundles a docker-java compatible with the
+             newer engine API. -->
+        <testcontainers.version>1.21.4</testcontainers.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Reactive web layer (Netty-based, matching the async Python FastAPI service) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- Persistence: JPA + PostgreSQL + Flyway migrations -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <!-- compile (not runtime): com.pgvector.PGvector (compile dep, no
+                 transitive driver) extends org.postgresql.util.PGobject, so the
+                 driver classes must be on the compile classpath for VectorType
+                 and any code touching the pgvector type. -->
+            <scope>compile</scope>
+        </dependency>
+        <!-- pgvector: provides the PGvector type for the papers.embedding column
+             (vector(1024)). Without it on the classpath, Hibernate cannot type
+             Paper.embedding and ddl-auto: validate fails at startup. -->
+        <dependency>
+            <groupId>com.pgvector</groupId>
+            <artifactId>pgvector</artifactId>
+            <version>0.1.6</version>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <!-- Bean validation -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Caching (Caffeine) for LLM / embedding results -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
+        <!-- Spring AI: OpenAI chat + embeddings -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- LangChain4j: agent / tooling integrations -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-spring-boot-starter</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- PDF parsing -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
+        </dependency>
+
+        <!-- Full-text search (BM25) -->
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-core</artifactId>
+            <version>${lucene.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-analysis-common</artifactId>
+            <version>${lucene.version}</version>
+        </dependency>
+
+        <!-- XML handling (arXiv Atom feed / grobid output) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+        </dependency>
+
+        <!-- Boilerplate reduction -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers: real PostgreSQL (pgvector) for integration tests.
+             Versions are managed by the Spring Boot 3.4.2 parent BOM. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

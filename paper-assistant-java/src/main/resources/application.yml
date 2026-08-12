@@ -1,0 +1,154 @@
+# ===========================================================================
+# Paper Assistant — base configuration (mirrors Python config.py)
+#
+# Every `paper-assistant.*` key maps 1:1 to an AppConfig record component.
+# Environment variables from the Python project are honored via placeholders;
+# the value after `:` is the default, matching the defaults in config.py.
+# ===========================================================================
+
+server:
+  port: ${API_PORT:8000}
+
+spring:
+  application:
+    name: paper-assistant
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/paper_assistant}
+    username: ${SPRING_DATASOURCE_USERNAME:paper_assistant}
+    password: ${SPRING_DATASOURCE_PASSWORD:paper_assistant}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  cache:
+    type: caffeine
+    cache-names: llmCache,embeddingCache
+    caffeine:
+      spec: maximumSize=200,expireAfterWrite=30m
+  ai:
+    openai:
+      # Standalone embedding key/URL first, then fall back to the LLM config —
+      # mirrors Python config.EMBEDDING_API_KEY or config.OPENAI_API_KEY (and
+      # the base-URL counterpart). Blank when neither is set, so Spring AI
+      # does not register an OpenAI bean (EmbedService treats it as absent).
+      api-key: ${EMBEDDING_API_KEY:${OPENAI_API_KEY:}}
+      base-url: ${EMBEDDING_BASE_URL:${OPENAI_BASE_URL:https://api.openai.com}}
+      chat:
+        options:
+          model: ${LLM_MODEL:qwen-2.5-72b-instruct}
+          temperature: ${LLM_TEMPERATURE:0.2}
+          max-tokens: ${LLM_MAX_TOKENS:1024}
+      embedding:
+        options:
+          model: ${EMBEDDING_MODEL:text-embedding-3-large}
+          # Pin vector dimensionality so text-embedding-3-large (native 3072)
+          # is truncated to config.EMBEDDING_DIM — matches Python's
+          # dimensions=config.EMBEDDING_DIM and the pgvector vector(1024) column.
+          dimensions: ${EMBEDDING_DIM:1024}
+  jackson:
+    time-zone: UTC
+    # Response JSON uses snake_case to match the Python/FastAPI contract and the
+    # frontend (e.g. query_text, download_success). Paper.abstractText is
+    # overridden per-field via @JsonProperty("abstract") because "abstract" is a
+    # Java keyword and the frontend expects the literal "abstract" key.
+    property-naming-strategy: SNAKE_CASE
+
+# --- AppConfig: paper-assistant.* (all fields from Python config.py) -------
+paper-assistant:
+  # Paths
+  data-dir: ${PAPER_ASSISTANT_DATA_DIR:data}
+  raw-pdf-dir: ${PAPER_ASSISTANT_RAW_PDF_DIR:${paper-assistant.data-dir}/raw}
+  parsed-dir: ${PAPER_ASSISTANT_PARSED_DIR:${paper-assistant.data-dir}/parsed}
+  chroma-dir: ${PAPER_ASSISTANT_CHROMA_DIR:${paper-assistant.data-dir}/chroma_db}
+  processed-dir: ${PAPER_ASSISTANT_PROCESSED_DIR:${paper-assistant.data-dir}/processed}
+  log-dir: ${PAPER_ASSISTANT_LOG_DIR:logs}
+
+  # arXiv fetch
+  arxiv-query: "${ARXIV_QUERY:cat:cs.AI AND ti:learning}"
+  arxiv-max-results: ${ARXIV_MAX_RESULTS:5}
+  arxiv-request-timeout: ${ARXIV_REQUEST_TIMEOUT:60}
+  pdf-download-delay: ${PDF_DOWNLOAD_DELAY:3.0}
+
+  # PDF parsing
+  pdf-parser: ${PDF_PARSER:pymupdf}
+  pdf-min-body-size: ${PDF_MIN_BODY_SIZE:6.5}
+
+  # Text chunking
+  chunk-size: ${CHUNK_SIZE:1000}
+  chunk-overlap: ${CHUNK_OVERLAP:200}
+
+  # Embedding
+  embedding-provider: ${EMBEDDING_PROVIDER:openai,voyage}
+  embedding-model: ${EMBEDDING_MODEL:text-embedding-3-large}
+  embedding-dim: ${EMBEDDING_DIM:1024}
+  embedding-batch-size: ${EMBEDDING_BATCH_SIZE:32}
+  embedding-api-key: ${EMBEDDING_API_KEY:}
+  embedding-base-url: ${EMBEDDING_BASE_URL:}
+  rrf-top-n: ${RRF_TOP_N:20}
+  rrf-k: ${RRF_K:60}
+
+  # LLM
+  openai-api-key: ${OPENAI_API_KEY:}
+  openai-base-url: ${OPENAI_BASE_URL:}
+  llm-model: ${LLM_MODEL:qwen-2.5-72b-instruct}
+  llm-temperature: ${LLM_TEMPERATURE:0.2}
+  llm-max-tokens: ${LLM_MAX_TOKENS:1024}
+  llm-qa-model: ${LLM_QA_MODEL:}
+  llm-summary-model: ${LLM_SUMMARY_MODEL:}
+  llm-survey-model: ${LLM_SURVEY_MODEL:}
+
+  # Cache
+  cache-enabled: ${CACHE_ENABLED:true}
+  cache-llm-maxsize: ${CACHE_LLM_MAXSIZE:200}
+  cache-llm-ttl: ${CACHE_LLM_TTL:1800}
+  cache-embed-maxsize: ${CACHE_EMBED_MAXSIZE:2000}
+  cache-embed-ttl: ${CACHE_EMBED_TTL:86400}
+
+  # API auth / rate limiting
+  api-auth-enabled: ${API_AUTH_ENABLED:false}
+  api-auth-key: ${API_AUTH_KEY:}
+  api-rate-limit: "${API_RATE_LIMIT:30/minute}"
+  api-cors-origins: ${API_CORS_ORIGINS:}
+
+  # Agent
+  llm-agent-model: ${LLM_AGENT_MODEL:}
+  agent-max-iterations: ${AGENT_MAX_ITERATIONS:10}
+  agent-temperature: ${AGENT_TEMPERATURE:0.1}
+  agent-max-context-tokens: ${AGENT_MAX_CONTEXT_TOKENS:8000}
+  agent-tool-retry: ${AGENT_TOOL_RETRY:2}
+
+  # Voyage AI
+  voyage-api-key: ${VOYAGE_API_KEY:}
+
+  # RAG retrieval
+  rag-top-k: ${RAG_TOP_K:5}
+  rag-collection-name: ${RAG_COLLECTION_NAME:knowledge}
+
+  # HNSW index parameters
+  hnsw-m: ${HNSW_M:32}
+  hnsw-ef-construction: ${HNSW_EF_CONSTRUCTION:200}
+  hnsw-ef-search: ${HNSW_EF_SEARCH:100}
+
+  # Hybrid retrieval (v3)
+  hybrid-retrieval: ${HYBRID_RETRIEVAL:true}
+  bm25-enabled: ${BM25_ENABLED:true}
+  reranker-enabled: ${RERANKER_ENABLED:true}
+  bm25-weight: ${BM25_WEIGHT:0.3}
+
+  # API service
+  api-host: ${API_HOST:127.0.0.1}
+  api-port: ${API_PORT:8000}
+
+  # Multi-user isolation
+  session-cookie: ${SESSION_COOKIE:paper_session}
+  session-ttl-days: ${SESSION_TTL_DAYS:30}
+
+  # UI
+  ui-title: ${UI_TITLE:Paper Assistant}
