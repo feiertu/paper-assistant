@@ -3,6 +3,8 @@ package com.paperassistant.service;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.paperassistant.config.AppConfig;
+import com.paperassistant.entity.Paper;
+import com.paperassistant.repository.PaperRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.embedding.Embedding;
@@ -21,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,6 +73,10 @@ public class EmbedService {
     private final List<String> providers;
     private final Cache<String, float[]> cache;
     private final boolean cacheEnabled;
+    /** BM25 sparse retrieval (used by RRF / hybrid retrieval). */
+    private final Bm25Service bm25Service;
+    /** pgvector dense retrieval (used by RRF / hybrid retrieval). */
+    private final PaperRepository paperRepository;
 
     /**
      * {@code openAiEmbeddingModel} is resolved through an {@link ObjectProvider}
@@ -79,7 +86,9 @@ public class EmbedService {
      */
     public EmbedService(AppConfig config,
                         ObjectProvider<OpenAiEmbeddingModel> openAiEmbeddingModelProvider,
-                        WebClient.Builder webClientBuilder) {
+                        WebClient.Builder webClientBuilder,
+                        Bm25Service bm25Service,
+                        PaperRepository paperRepository) {
         this.config = config;
         this.openAiEmbeddingModel = openAiEmbeddingModelProvider.getIfAvailable();
         this.voyageWebClient = webClientBuilder.baseUrl(VOYAGE_BASE_URL).build();
@@ -89,6 +98,8 @@ public class EmbedService {
                 .maximumSize(Math.max(0, config.cacheEmbedMaxsize()))
                 .expireAfterWrite(Duration.ofSeconds(Math.max(1, config.cacheEmbedTtl())))
                 .build();
+        this.bm25Service = bm25Service;
+        this.paperRepository = paperRepository;
         log.info("EmbedService initialized: providers={} model={} dim={} cache={} openai={}",
                 providers, config.embeddingModel(), config.embeddingDim(),
                 cacheEnabled ? "enabled" : "disabled",
@@ -140,6 +151,146 @@ public class EmbedService {
     /** The configured embedding dimensionality. */
     public int dim() {
         return config.embeddingDim();
+    }
+
+    // ---------- Hybrid retrieval (RRF fusion) ----------
+
+    /**
+     * Reciprocal Rank Fusion over the two retrieval paths:
+     *
+     * <ol>
+     *   <li><b>dense</b> — {@code embedQuery(query)} → pgvector
+     *       {@code <=>} query via {@link PaperRepository#findSimilarByEmbedding};</li>
+     *   <li><b>BM25</b> — {@link Bm25Service#search} sparse retrieval.</li>
+     * </ol>
+     *
+     * <p>Each path contributes its top {@code rrfTopN} ranked hits, fused with
+     * {@code weight / (rrfK + rank)} (rank 1-indexed). Dense weight = {@code 1 - bm25Weight},
+     * BM25 weight = {@code bm25Weight} (config, default 0.3). Results are sorted by
+     * RRF score descending and trimmed to {@code topK}; every hit carries an
+     * {@code rrf_score} field (mirrors Python {@code hybrid_retrieve()}).
+     *
+     * @param query   search text
+     * @param topK    max results to return
+     * @param ownerId multi-user isolation filter for the pgvector query
+     */
+    public List<Map<String, Object>> rrfRerank(String query, int topK, String ownerId) {
+        return fuseRrf(query, topK, ownerId);
+    }
+
+    /**
+     * Hybrid retrieval pipeline: dense + BM25 → RRF fusion → (optional
+     * Cross-Encoder re-ranking) → top-K.
+     *
+     * <p>Currently identical to {@link #rrfRerank}: the Cross-Encoder step is a
+     * TODO (DJL/ONNX needs separate handling, as in Python's
+     * {@code src/embed/reranker.py}), so the RRF-fused result is returned as-is.
+     */
+    public List<Map<String, Object>> hybridRetrieve(String query, int topK, String ownerId) {
+        // TODO(Cross-Encoder): after RRF fusion, re-rank fused_hits with a
+        // Cross-Encoder when len(fused) > topK (mirrors Python hybrid_retrieve
+        // Step 4). DJL/ONNX model hosting is deferred to a later task.
+        return fuseRrf(query, topK, ownerId);
+    }
+
+    /**
+     * Dense + BM25 retrieval → RRF fusion → top-K.
+     *
+     * <p>Result maps mirror Python {@code hybrid_retrieve()} output: keys
+     * {@code id}, {@code document}, {@code metadata}, {@code rrf_score}, plus a
+     * unified {@code score} (RRF score when the path has no native score) and a
+     * {@code distance} compatibility field derived from {@code score}.
+     */
+    private List<Map<String, Object>> fuseRrf(String query, int topK, String ownerId) {
+        if (query == null || query.isBlank() || topK <= 0) {
+            return List.of();
+        }
+        int rrfTopN = Math.max(1, config.rrfTopN());
+        int rrfK = Math.max(1, config.rrfK());
+        double bm25Weight = config.bm25Weight();
+        double denseWeight = 1.0 - bm25Weight;
+
+        // 1) Dense retrieval: query embedding → pgvector similarity.
+        float[] queryEmbedding = embedQuery(query);
+        // Arrays.toString(float[]) yields "[0.1, 0.2, ...]" — the pgvector literal format.
+        List<Paper> densePapers = paperRepository.findSimilarByEmbedding(
+                Arrays.toString(queryEmbedding), ownerId, rrfTopN);
+
+        // 2) BM25 sparse retrieval.
+        List<Bm25Hit> bm25Hits = bm25Service.search(query, rrfTopN);
+
+        // 3) RRF fusion: score = weight / (rrfK + rank), rank 1-indexed.
+        Map<String, Double> rrfScores = new HashMap<>();
+        Map<String, Map<String, Object>> hitMap = new LinkedHashMap<>();
+
+        for (int rank = 0; rank < densePapers.size(); rank++) {
+            Paper p = densePapers.get(rank);
+            String id = p.getArxivId();
+            rrfScores.merge(id, denseWeight / (rrfK + rank + 1), Double::sum);
+            hitMap.putIfAbsent(id, toDenseHit(p));
+        }
+        for (int rank = 0; rank < bm25Hits.size(); rank++) {
+            Bm25Hit hit = bm25Hits.get(rank);
+            rrfScores.merge(hit.id(), bm25Weight / (rrfK + rank + 1), Double::sum);
+            hitMap.putIfAbsent(hit.id(), toBm25Hit(hit));
+        }
+
+        // 4) Sort by RRF score descending, keep the top-K. When both paths return
+        //    the same id, the dense hit is kept (Python keeps the first path).
+        List<Map.Entry<String, Double>> sorted = new ArrayList<>(rrfScores.entrySet());
+        sorted.sort(Map.Entry.<String, Double>comparingByValue().reversed());
+
+        List<Map<String, Object>> results = new ArrayList<>(Math.min(topK, sorted.size()));
+        for (Map.Entry<String, Double> entry : sorted) {
+            if (results.size() >= topK) {
+                break;
+            }
+            Map<String, Object> hit = new LinkedHashMap<>(hitMap.get(entry.getKey()));
+            double rrfScore = Math.round(entry.getValue() * 1_000_000.0) / 1_000_000.0;
+            hit.put("rrf_score", rrfScore);
+            // Unify the score field: dense hits have no native score here (the
+            // distance column is not mapped onto Paper), so fall back to rrf_score.
+            if (!hit.containsKey("score")) {
+                hit.put("score", rrfScore);
+            }
+            // Python hybrid_retrieve keeps a distance field for old-code compat.
+            if (!hit.containsKey("distance")) {
+                double score = hit.get("score") instanceof Number n ? n.doubleValue() : 0.0;
+                hit.put("distance", score != 0.0 ? 1.0 / (1.0 + score) : 0.0);
+            }
+            results.add(hit);
+        }
+        return results;
+    }
+
+    /** Dense hit shape: {@code {id, document, metadata}} (id = paper arxivId). */
+    private static Map<String, Object> toDenseHit(Paper paper) {
+        Map<String, Object> hit = new LinkedHashMap<>();
+        hit.put("id", paper.getArxivId());
+        hit.put("document", documentText(paper));
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("paper_id", paper.getId());
+        hit.put("metadata", metadata);
+        return hit;
+    }
+
+    /** BM25 hit shape: {@code {id, document, metadata, score}}. */
+    private static Map<String, Object> toBm25Hit(Bm25Hit hit) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", hit.id());
+        map.put("document", hit.document());
+        map.put("metadata", hit.metadata());
+        map.put("score", hit.score());
+        return map;
+    }
+
+    /** Document text for a paper: abstract, falling back to the title. */
+    private static String documentText(Paper paper) {
+        String text = paper.getAbstractText();
+        if (!StringUtils.hasText(text)) {
+            text = paper.getTitle();
+        }
+        return text == null ? "" : text;
     }
 
     // ---------- Cache-aware embedding (mirrors _embed_with_cache) ----------
