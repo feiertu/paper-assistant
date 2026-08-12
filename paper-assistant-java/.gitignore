@@ -1,0 +1,16 @@
+# Maven build output
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Secrets / runtime data
+.env
+data/
+logs/

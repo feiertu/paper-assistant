@@ -1,0 +1,42 @@
+# ===========================================================================
+# Paper Assistant — `dev` profile overrides
+#
+# Activate with: --spring.profiles.active=dev  (or SPRING_PROFILES_ACTIVE=dev)
+# Assumes a local PostgreSQL instance on localhost:5432 with the
+# paper_assistant database and credentials below.
+# ===========================================================================
+
+server:
+  port: ${API_PORT:8000}
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/paper_assistant
+    username: paper_assistant
+    password: paper_assistant
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  cache:
+    type: caffeine
+    cache-names: llmCache,embeddingCache
+    caffeine:
+      spec: maximumSize=500,expireAfterWrite=30m
+
+logging:
+  level:
+    com.paperassistant: DEBUG
+    org.springframework.ai: INFO
+    org.hibernate.SQL: DEBUG
+
+paper-assistant:
+  api-auth-enabled: ${API_AUTH_ENABLED:false}
+  api-rate-limit: "${API_RATE_LIMIT:100/minute}"
+  log-dir: ${PAPER_ASSISTANT_LOG_DIR:logs}
