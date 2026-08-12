@@ -34,8 +34,12 @@ spring:
       spec: maximumSize=200,expireAfterWrite=30m
   ai:
     openai:
-      api-key: ${OPENAI_API_KEY:}
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      # Standalone embedding key/URL first, then fall back to the LLM config —
+      # mirrors Python config.EMBEDDING_API_KEY or config.OPENAI_API_KEY (and
+      # the base-URL counterpart). Blank when neither is set, so Spring AI
+      # does not register an OpenAI bean (EmbedService treats it as absent).
+      api-key: ${EMBEDDING_API_KEY:${OPENAI_API_KEY:}}
+      base-url: ${EMBEDDING_BASE_URL:${OPENAI_BASE_URL:https://api.openai.com}}
       chat:
         options:
           model: ${LLM_MODEL:qwen-2.5-72b-instruct}
@@ -44,6 +48,10 @@ spring:
       embedding:
         options:
           model: ${EMBEDDING_MODEL:text-embedding-3-large}
+          # Pin vector dimensionality so text-embedding-3-large (native 3072)
+          # is truncated to config.EMBEDDING_DIM — matches Python's
+          # dimensions=config.EMBEDDING_DIM and the pgvector vector(1024) column.
+          dimensions: ${EMBEDDING_DIM:1024}
   jackson:
     time-zone: UTC
     # Response JSON uses snake_case to match the Python/FastAPI contract and the
