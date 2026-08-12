@@ -46,6 +46,11 @@ spring:
           model: ${EMBEDDING_MODEL:text-embedding-3-large}
   jackson:
     time-zone: UTC
+    # Response JSON uses snake_case to match the Python/FastAPI contract and the
+    # frontend (e.g. query_text, download_success). Paper.abstractText is
+    # overridden per-field via @JsonProperty("abstract") because "abstract" is a
+    # Java keyword and the frontend expects the literal "abstract" key.
+    property-naming-strategy: SNAKE_CASE
 
 # --- AppConfig: paper-assistant.* (all fields from Python config.py) -------
 paper-assistant:

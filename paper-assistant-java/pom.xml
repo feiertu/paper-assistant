@@ -19,6 +19,10 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- Spring Boot 3.4.2 manages Lombok 1.18.36, which does NOT support the
+             JDK 25 javac that Maven runs on (see Task 1 report), causing Lombok
+             codegen to be silently skipped. 1.18.40+ adds JDK 25 support. -->
+        <lombok.version>1.18.40</lombok.version>
         <spring-ai.version>1.0.0-M6</spring-ai.version>
         <langchain4j.version>1.0.0-beta1</langchain4j.version>
         <pdfbox.version>3.0.3</pdfbox.version>
