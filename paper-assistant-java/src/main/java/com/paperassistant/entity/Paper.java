@@ -11,6 +11,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
 
@@ -73,5 +74,6 @@ public class Paper {
     private LocalDateTime createdAt;
 
     @Column(name = "embedding", columnDefinition = "vector(1024)")
+    @Type(VectorType.class)
     private float[] embedding;
 }

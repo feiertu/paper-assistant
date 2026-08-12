@@ -34,6 +34,11 @@
         <langchain4j.version>1.0.0-beta1</langchain4j.version>
         <pdfbox.version>3.0.3</pdfbox.version>
         <lucene.version>9.12.0</lucene.version>
+        <!-- Spring Boot 3.4.2 manages Testcontainers 1.20.4, whose bundled
+             docker-java cannot talk to Docker Engine 29.x (npipe ping returns
+             400 "BadRequest"). 1.21.x bundles a docker-java compatible with the
+             newer engine API. -->
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
 
     <repositories>
@@ -74,7 +79,11 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
+            <!-- compile (not runtime): com.pgvector.PGvector (compile dep, no
+                 transitive driver) extends org.postgresql.util.PGobject, so the
+                 driver classes must be on the compile classpath for VectorType
+                 and any code touching the pgvector type. -->
+            <scope>compile</scope>
         </dependency>
         <!-- pgvector: provides the PGvector type for the papers.embedding column
              (vector(1024)). Without it on the classpath, Hibernate cannot type
@@ -168,6 +177,19 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers: real PostgreSQL (pgvector) for integration tests.
+             Versions are managed by the Spring Boot 3.4.2 parent BOM. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
