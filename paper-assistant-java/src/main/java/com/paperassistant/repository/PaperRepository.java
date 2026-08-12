@@ -25,6 +25,12 @@ public interface PaperRepository extends JpaRepository<Paper, Long> {
     Optional<Paper> findByArxivIdAndOwnerId(String arxivId, String ownerId);
 
     /**
+     * 全局按 arxivId 精确查找单篇论文（papers.arxiv_id 为全局 UNIQUE）。
+     * 用于引用图查询判断被引/引用论文是否已入库（Python {@code LEFT JOIN papers}）。
+     */
+    Optional<Paper> findByArxivId(String arxivId);
+
+    /**
      * 分页查询某用户全部论文，按创建时间倒序。
      */
     @Query("SELECT p FROM Paper p WHERE p.ownerId = :ownerId ORDER BY p.createdAt DESC")
