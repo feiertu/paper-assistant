@@ -109,6 +109,19 @@ public class EmbedService {
     // ---------- Public API (mirrors Python Embedder) ----------
 
     /**
+     * Returns the raw Caffeine embedding cache so that controllers (e.g.
+     * {@code SystemController}) can report hit/miss stats and clear it on demand.
+     */
+    public Cache<String, float[]> getEmbedCache() {
+        return cache;
+    }
+
+    /** Whether the embedding cache is currently enabled. */
+    public boolean isEmbedCacheEnabled() {
+        return cacheEnabled;
+    }
+
+    /**
      * Embed a list of texts using the first configured provider, with per-text
      * cache lookup and in-order merging. Empty input yields an empty list.
      */
