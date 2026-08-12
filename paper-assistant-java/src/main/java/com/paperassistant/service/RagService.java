@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paperassistant.config.AppConfig;
 import com.paperassistant.entity.Paper;
 import com.paperassistant.entity.QueryRecord;
+import com.paperassistant.llm.ChatClientService;
 import com.paperassistant.llm.PromptTemplates;
 import com.paperassistant.repository.PaperRepository;
 import com.paperassistant.repository.QueryRecordRepository;
@@ -22,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +60,7 @@ public class RagService {
     private final PaperRepository paperRepository;
     private final ParseService parseService;
     private final QueryRecordRepository queryRecordRepository;
+    private final ChatClientService chatClientService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -73,6 +76,7 @@ public class RagService {
                       ParseService parseService,
                       QueryRecordRepository queryRecordRepository,
                       ObjectMapper objectMapper,
+                      ChatClientService chatClientService,
                       ObjectProvider<ChatClient.Builder> chatClientBuilderProvider) {
         this.config = config;
         this.embedService = embedService;
@@ -81,6 +85,7 @@ public class RagService {
         this.parseService = parseService;
         this.queryRecordRepository = queryRecordRepository;
         this.objectMapper = objectMapper;
+        this.chatClientService = chatClientService;
 
         this.chatClient = buildChatClient(chatClientBuilderProvider);
 
@@ -568,6 +573,167 @@ public class RagService {
     }
 
     // ──────────────────────────────────────────────
+    //  Recommend similar + global analysis
+    // ──────────────────────────────────────────────
+
+    /**
+     * Recommends papers similar to a given paper, mirroring Python
+     * {@code recommend_similar()}.
+     *
+     * <p>Algorithm:
+     * <ol>
+     *   <li>Locate the source paper by {@code arxivId} and read its embedding
+     *       vector (a single pgvector row per paper in this rewrite).</li>
+     *   <li>Query pgvector for the closest papers via the {@code <=>} cosine
+     *       distance operator (fetch {@code topK + 1} candidates so the source
+     *       paper itself can be dropped).</li>
+     *   <li>Exclude the source paper and papers without an embedding, then
+     *       convert each candidate's cosine distance to a similarity score
+     *       {@code 1 / (1 + distance)} (same formula as Python).</li>
+     * </ol>
+     *
+     * <p>Each result is {@code {"arxiv_id", "title", "score", "shared_chunks"}};
+     * {@code shared_chunks} is {@code 1} because every paper stores a single
+     * embedding (one conceptual chunk). Returns an empty list when the source
+     * paper is not found or has no embedding.
+     *
+     * @param arxivId source paper identifier
+     * @param topK    max results (non-positive falls back to 5)
+     * @return ordered list of similar papers, most similar first
+     */
+    public List<Map<String, Object>> recommendSimilar(String arxivId, int topK) {
+        if (arxivId == null || arxivId.isBlank()) {
+            return List.of();
+        }
+        int k = topK <= 0 ? 5 : topK;
+
+        Optional<Paper> sourceOpt = paperRepository.findByArxivIdAndOwnerId(arxivId, "");
+        if (sourceOpt.isEmpty() || sourceOpt.get().getEmbedding() == null
+                || sourceOpt.get().getEmbedding().length == 0) {
+            return List.of();
+        }
+        Paper source = sourceOpt.get();
+
+        // Query k+1 candidates so we can drop the source paper and still return topK.
+        String embeddingStr = Arrays.toString(source.getEmbedding());
+        List<Paper> candidates = paperRepository.findSimilarByEmbedding(embeddingStr, "", k + 1);
+
+        List<Map<String, Object>> results = new ArrayList<>(k);
+        for (Paper candidate : candidates) {
+            if (arxivId.equals(candidate.getArxivId())) {
+                continue;
+            }
+            if (candidate.getEmbedding() == null || candidate.getEmbedding().length == 0) {
+                continue;
+            }
+            if (results.size() >= k) {
+                break;
+            }
+            double distance = cosineDistance(source.getEmbedding(), candidate.getEmbedding());
+            double score = Math.round((1.0 / (1.0 + distance)) * 10_000.0) / 10_000.0;
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("arxiv_id", candidate.getArxivId());
+            item.put("title", candidate.getTitle() != null && !candidate.getTitle().isBlank()
+                    ? candidate.getTitle() : candidate.getArxivId());
+            item.put("score", score);
+            item.put("shared_chunks", 1);
+            results.add(item);
+        }
+        return results;
+    }
+
+    /**
+     * Global paper analysis: gathers the metadata of all ingested papers and
+     * asks the LLM for an overview, mirroring Python {@code analyze_all_papers()}.
+     *
+     * <p>Algorithm:
+     * <ol>
+     *   <li>Load up to 100 ingested papers for the owner.</li>
+     *   <li>Build a context of {@code [n] arxiv_id | title / authors / date /
+     *       abstract} for every paper (abstract truncated to 300 chars).</li>
+     *   <li>Compose a Chinese or English system + user prompt asking the LLM to
+     *       extract 3-5 theme keywords, categorize the papers, and summarize
+     *       research trends.</li>
+     *   <li>Call {@link ChatClientService#chat} with the QA model and return the
+     *       analysis text.</li>
+     * </ol>
+     *
+     * @param query   the user's specific question (blank uses the default prompt)
+     * @param lang    {@code "zh"} or {@code "en"}
+     * @param ownerId multi-user isolation identifier
+     * @return analysis text, or an error string prefixed with {@code [ERROR]}
+     */
+    public String analyzeAllPapers(String query, String lang, String ownerId) {
+        String owner = ownerId != null ? ownerId : "";
+        List<Paper> all = paperRepository.findIngestedByOwnerId(owner);
+        List<Paper> papers = all.size() > 100 ? all.subList(0, 100) : all;
+
+        if (papers.isEmpty()) {
+            return "[ERROR] 论文库中暂无论文，请先导入数据。";
+        }
+
+        StringBuilder context = new StringBuilder();
+        for (int i = 0; i < papers.size(); i++) {
+            Paper p = papers.get(i);
+            String title = (p.getTitle() != null && !p.getTitle().isBlank())
+                    ? p.getTitle() : p.getArxivId();
+            String abstractText = p.getAbstractText() != null ? p.getAbstractText() : "";
+            if (abstractText.length() > 300) {
+                abstractText = abstractText.substring(0, 300);
+            }
+            String authors = (p.getAuthors() != null && !p.getAuthors().isBlank())
+                    ? p.getAuthors() : "未知";
+            if (authors.length() > 100) {
+                authors = authors.substring(0, 100);
+            }
+            String published = (p.getPublished() != null && !p.getPublished().isBlank())
+                    ? p.getPublished() : "未知";
+
+            if (i > 0) {
+                context.append("\n\n");
+            }
+            context.append("[").append(i + 1).append("] ").append(p.getArxivId())
+                    .append(" | ").append(title).append('\n')
+                    .append("    作者: ").append(authors).append(" | 日期: ").append(published).append('\n')
+                    .append("    摘要: ").append(abstractText);
+        }
+
+        boolean zh = "zh".equals(lang);
+        String systemPrompt = zh
+                ? "你是学术论文分析助手，擅长从大量论文中提炼研究方向、主题和方法论趋势。"
+                : "You are an academic paper analysis assistant, skilled at extracting "
+                        + "research directions and methodology trends from large paper collections.";
+        String defaultQuery = zh
+                ? "请总结这些论文共同关注的研究方向、主要方法和核心发现。用 3-5 个主题词概括，并列出每篇论文的核心贡献。"
+                : "Please summarize the research directions, main methods, and core findings "
+                        + "these papers share. Use 3-5 theme keywords, and list each paper's core contribution.";
+        String actualQuery = (query != null && !query.isBlank()) ? query : defaultQuery;
+
+        String userPrompt = zh
+                ? "以下是论文库中全部 " + papers.size() + " 篇论文的元数据：\n\n" + context
+                        + "\n\n用户问题：" + actualQuery
+                        + "\n\n要求：\n1. 先提炼 3-5 个共同主题词\n2. 按主题分类讨论论文\n"
+                        + "3. 总结整体研究趋势和方法论特点\n4. 严格基于提供的元数据，不编造"
+                : "Here are the metadata for all " + papers.size() + " papers in the library:\n\n" + context
+                        + "\n\nUser question: " + actualQuery
+                        + "\n\nRequirements:\n1. First extract 3-5 common theme keywords\n"
+                        + "2. Categorize papers by theme\n3. Summarize overall research trends and methodology patterns\n"
+                        + "4. Strictly based on provided metadata, no fabrication";
+
+        String effectiveModel = config.effectiveLlmQaModel();
+        log.info("analyzeAllPapers: model={} papers={} lang={}",
+                effectiveModel, papers.size(), lang);
+
+        // ChatClientService.chat() itself throws IllegalStateException when no API
+        // key is configured (same requireChatClient contract as this class).
+        String result = chatClientService.chat(
+                ChatClientService.messages(systemPrompt, userPrompt),
+                effectiveModel, config.llmTemperature());
+        return result != null ? result : "[ERROR] 分析生成失败：模型返回为空";
+    }
+
+    // ──────────────────────────────────────────────
     //  Private helpers
     // ──────────────────────────────────────────────
 
@@ -711,5 +877,29 @@ public class RagService {
             return "";
         }
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
+    }
+
+    /**
+     * Cosine distance {@code 1 - cosine_similarity(a, b)} — the same metric as
+     * PostgreSQL pgvector's {@code <=>} operator used by
+     * {@link PaperRepository#findSimilarByEmbedding}. Handles any-dimensional
+     * vectors and clamps the similarity to {@code [-1, 1]} to guard against
+     * float rounding; a zero-norm vector is treated as maximally distant.
+     */
+    private static double cosineDistance(float[] a, float[] b) {
+        int len = Math.min(a.length, b.length);
+        double dot = 0.0;
+        double normA = 0.0;
+        double normB = 0.0;
+        for (int i = 0; i < len; i++) {
+            dot += (double) a[i] * b[i];
+            normA += (double) a[i] * a[i];
+            normB += (double) b[i] * b[i];
+        }
+        if (normA == 0.0 || normB == 0.0) {
+            return 1.0;
+        }
+        double sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+        return 1.0 - Math.max(-1.0, Math.min(1.0, sim));
     }
 }
