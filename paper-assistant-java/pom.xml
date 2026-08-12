@@ -23,6 +23,13 @@
              JDK 25 javac that Maven runs on (see Task 1 report), causing Lombok
              codegen to be silently skipped. 1.18.40+ adds JDK 25 support. -->
         <lombok.version>1.18.40</lombok.version>
+        <!-- maven-compiler-plugin reads <proc> from ${maven.compiler.proc}. On JDK 21+
+             javac invoked by the plugin's in-process compiler does NOT run annotation
+             processors discovered on the classpath (Lombok silently produces no
+             getters/builders while still compiling SUCCESS). Forcing proc=full makes
+             Lombok codegen reliable; without it, the Task 2 entities have no getters
+             and Spring Data would fail at runtime. -->
+        <maven.compiler.proc>full</maven.compiler.proc>
         <spring-ai.version>1.0.0-M6</spring-ai.version>
         <langchain4j.version>1.0.0-beta1</langchain4j.version>
         <pdfbox.version>3.0.3</pdfbox.version>
@@ -68,6 +75,14 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+        <!-- pgvector: provides the PGvector type for the papers.embedding column
+             (vector(1024)). Without it on the classpath, Hibernate cannot type
+             Paper.embedding and ddl-auto: validate fails at startup. -->
+        <dependency>
+            <groupId>com.pgvector</groupId>
+            <artifactId>pgvector</artifactId>
+            <version>0.1.6</version>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>

@@ -37,10 +37,12 @@ public class QueryRecord {
     private String answerText;
 
     @Column(name = "lang")
-    private String lang;
+    @Builder.Default
+    private String lang = "zh";
 
     @Column(name = "hit_count")
-    private Integer hitCount;
+    @Builder.Default
+    private Integer hitCount = 0;
 
     @Column(name = "owner_id")
     private String ownerId;

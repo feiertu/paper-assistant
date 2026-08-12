@@ -59,10 +59,12 @@ public class Paper {
     private String source;
 
     @Column(name = "ingest_status")
-    private String ingestStatus;
+    @Builder.Default
+    private String ingestStatus = "pending";
 
     @Column(name = "chunk_count")
-    private Integer chunkCount;
+    @Builder.Default
+    private Integer chunkCount = 0;
 
     @Column(name = "owner_id")
     private String ownerId;

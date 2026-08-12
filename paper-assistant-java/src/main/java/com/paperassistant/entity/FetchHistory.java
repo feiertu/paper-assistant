@@ -32,7 +32,8 @@ public class FetchHistory {
     private String queryText;
 
     @Column(name = "max_results", nullable = false)
-    private Integer maxResults;
+    @Builder.Default
+    private Integer maxResults = 5;
 
     @Column(name = "total_found")
     private Integer totalFound;
